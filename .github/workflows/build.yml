@@ -41,9 +41,9 @@ jobs:
           QM_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           QM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           QM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        # The ADB library's JitPack versions aren't well documented, so try them in order.
+        # Only these two libadb-android versions exist on JitPack; try the newest first.
         run: |
-          for v in v2.2.0 2.2.0 2.1.0 2.0.0 master-SNAPSHOT 1.0.1; do
+          for v in master-SNAPSHOT 1.0.1; do
             echo "::group::Trying libadb-android $v"
             if gradle assembleRelease -PlibadbVersion=$v; then
               echo "::endgroup::"
