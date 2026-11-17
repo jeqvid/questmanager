@@ -28,7 +28,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -49,7 +51,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         final int kind, lo, hi;
         final String[] props;
         EditText input;
-        TextView status;
+        TextView status, current;
 
         Setting(String title, String hint, String tag, int kind, int lo, int hi, String... props) {
             this.title = title;
@@ -68,6 +70,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final List<TextView> tabs = new ArrayList<>();
     private final List<View> pages = new ArrayList<>();
+    private final List<Setting> allSettings = new ArrayList<>();
     private float density;
     private ScrollView scroll;
     private int setupTab = -1;
@@ -78,7 +81,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private CommandRunner runner;
     private AdbRunner adb; // null on Quest 1
 
-    private TextView setupStatus, connStatus, proxStatus;
+    private TextView setupStatus, connStatus, proxStatus, proxCurrent;
     private EditText pairCode, pairPort, connectPort;
 
     // ---------------------------------------------------------------- lifecycle
@@ -145,6 +148,79 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         super.onDestroy();
         if (rainbowAnim != null) rainbowAnim.cancel();
         worker.shutdownNow();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshCurrent();
+    }
+
+    // ---------------------------------------------------------------- current values
+    /** Reads every property from the headset and fills in the "Current:" lines. */
+    private void refreshCurrent() {
+        updateProx();
+        if (!runner.isReady()) {
+            for (Setting s : allSettings) s.current.setText("Current: connect wireless ADB to see");
+            return;
+        }
+        final StringBuilder cmd = new StringBuilder();
+        for (Setting s : allSettings) {
+            for (String p : s.props) cmd.append("echo \"").append(p).append("=$(getprop ").append(p).append(")\"; ");
+        }
+        cmd.append("true");
+        worker.execute(() -> {
+            final CommandRunner.Result r = runner.run(cmd.toString());
+            final Map<String, String> values = new HashMap<>();
+            for (String line : r.output.split("\n")) {
+                int eq = line.indexOf('=');
+                if (eq > 0) values.put(line.substring(0, eq).trim(), line.substring(eq + 1).trim());
+            }
+            runOnUiThread(() -> {
+                for (Setting s : allSettings) {
+                    s.current.setText(r.ok ? "Current: " + describe(s, values) : "Current: couldn't read");
+                }
+            });
+        });
+    }
+
+    private static String describe(Setting s, Map<String, String> values) {
+        List<String> v = new ArrayList<>();
+        for (String p : s.props) {
+            String x = values.get(p);
+            v.add(x == null || x.isEmpty() ? "default" : x);
+        }
+        if (v.size() == 1) {
+            String one = v.get(0);
+            return s.kind == HZ && !"default".equals(one) ? one + " Hz" : one;
+        }
+        if (v.size() == 2) return v.get(0) + " x " + v.get(1);
+        boolean same = true;
+        for (String x : v) same &= x.equals(v.get(0));
+        if (same) return v.get(0);
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < v.size(); i++) {
+            if (i > 0) b.append(" / ");
+            b.append(v.get(i));
+        }
+        return b.toString();
+    }
+
+    /** The proximity sensor has no readable setting, so remember what was last set (reset by a reboot). */
+    private void saveProx(boolean disabled) {
+        prefs.edit().putBoolean("prox_off", disabled).putInt("prox_boot", bootCount()).apply();
+        updateProx();
+    }
+
+    private void updateProx() {
+        if (proxCurrent == null) return;
+        boolean off = prefs.getBoolean("prox_off", false) && prefs.getInt("prox_boot", -2) == bootCount();
+        proxCurrent.setText(off ? "Current: Disabled" : "Current: Enabled (default)");
+    }
+
+    private int bootCount() {
+        if (Build.VERSION.SDK_INT < 24) return -1;
+        return Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT, -1);
     }
 
     /** Rainbow gradient that slides across the text forever (shimmer). */
@@ -299,13 +375,15 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             page.addView(r);
         }
         spacerHeader(page, "PROXIMITY SENSOR");
+        proxCurrent = text("Current: ...", 16, 0xffcfcfcf);
+        page.addView(proxCurrent);
         LinearLayout r = row();
         r.addView(button("DISABLE", v -> runCommand(
                 "am broadcast -a com.oculus.vrpowermanager.prox_close >/dev/null && echo 'Proximity sensor disabled (until reboot or Enable).'",
-                proxStatus, "Sending...")), lp(-2, -2, 0, 0));
+                proxStatus, "Sending...", () -> saveProx(true))), lp(-2, -2, 0, 0));
         r.addView(button("ENABLE", v -> runCommand(
                 "am broadcast -a com.oculus.vrpowermanager.automation_disable >/dev/null && echo 'Proximity sensor enabled.'",
-                proxStatus, "Sending...")), lp(-2, -2, 0, 14));
+                proxStatus, "Sending...", () -> saveProx(false))), lp(-2, -2, 0, 14));
         page.addView(r);
         proxStatus = text("", 14, STATUS);
         page.addView(proxStatus);
@@ -321,6 +399,9 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             page.addView(tag);
         }
         page.addView(header(s.title));
+        s.current = text("Current: ...", 16, 0xffcfcfcf);
+        page.addView(s.current);
+        allSettings.add(s);
         LinearLayout r = row();
         s.input = input(s.hint);
         r.addView(s.input, lp(0, -2, 1f, 0));
@@ -396,7 +477,11 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         return vars + "echo \"" + echo + "\"";
     }
 
-    private void runCommand(final String cmd, final TextView status, String pending) {
+    private void runCommand(String cmd, TextView status, String pending) {
+        runCommand(cmd, status, pending, null);
+    }
+
+    private void runCommand(final String cmd, final TextView status, String pending, final Runnable onOk) {
         if (!runner.isReady()) {
             status.setText("Not connected. Set up wireless ADB first.");
             if (setupTab >= 0) selectTab(setupTab);
@@ -407,7 +492,9 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             final CommandRunner.Result r = runner.run(cmd);
             runOnUiThread(() -> {
                 status.setText(r.ok ? "OK  " + r.output : "Failed: " + r.output);
+                if (r.ok && onOk != null) onOk.run();
                 updateConnStatus();
+                refreshCurrent();
             });
         });
     }
@@ -433,6 +520,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 updateConnStatus();
                 if (connected) {
                     setupStatus.setText("Connected to wireless ADB.");
+                    refreshCurrent();
                 } else {
                     setupStatus.setText("Not connected yet. Follow the steps above.");
                     selectTab(setupTab);
@@ -483,6 +571,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             runOnUiThread(() -> {
                 setupStatus.setText(m);
                 updateConnStatus();
+                refreshCurrent();
             });
         });
     }
