@@ -14,7 +14,7 @@ android {
     defaultConfig {
         applicationId 'com.jeqvid.QuestManager'
         minSdk 23
-        targetSdk 32
+        targetSdk 34
         versionCode 8
         versionName '2.0.1'
     }
@@ -42,9 +42,8 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
-    // Sideloaded app, not on Google Play: don't fail the build on Play-store lint rules.
+    // Lint still runs and reports problems, but only real compile errors stop the build.
     lint {
-        checkReleaseBuilds false
         abortOnError false
     }
 
