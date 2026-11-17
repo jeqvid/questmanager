@@ -10,10 +10,19 @@
         android:label="Quest Manager"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:allowBackup="false">
+        <meta-data
+            android:name="com.oculus.supportedDevices"
+            android:value="quest|quest2|questpro|quest3|quest3s" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|density|uiMode">
+            <!-- Quest panel size: 4:3 (1024 x 768 dp) instead of a tall phone-shaped window -->
+            <layout
+                android:defaultWidth="1024dp"
+                android:defaultHeight="768dp"
+                android:minWidth="640dp"
+                android:minHeight="480dp" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

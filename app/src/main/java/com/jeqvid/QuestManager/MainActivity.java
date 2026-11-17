@@ -587,8 +587,16 @@ public class MainActivity extends Activity implements View.OnHoverListener {
 
     private static final String AOSP_SETTINGS = "com.android.settings";
 
-    /** Opens the real Android Settings app (not Meta's) by naming its activity directly. */
+    /**
+     * Opens the real Android Settings app (not Meta's). With shell access (root, or wireless ADB already
+     * connected) it's started from the shell like Singularity does; otherwise every app-level way is tried.
+     */
     private void openAndroidSettings() {
+        if (runner.isReady()) {
+            runCommand("am start -n com.android.settings/com.android.settings.Settings >/dev/null && echo 'Opened Android Settings.'",
+                    setupStatus, "Opening Android Settings...");
+            return;
+        }
         launchFirst(
                 explicit("com.android.settings.Settings"),
                 new Intent(Settings.ACTION_SETTINGS));
@@ -596,8 +604,16 @@ public class MainActivity extends Activity implements View.OnHoverListener {
 
     /** Opens Android's Developer options, where Wireless debugging lives. */
     private void openDeveloperOptions() {
+        if (runner.isReady()) {
+            runCommand("(am start -a com.android.settings.APPLICATION_DEVELOPMENT_SETTINGS"
+                            + " || am start -n 'com.android.settings/.Settings$DevelopmentSettingsDashboardActivity') >/dev/null"
+                            + " && echo 'Opened Developer options.'",
+                    setupStatus, "Opening Developer options...");
+            return;
+        }
         launchFirst(
                 explicit("com.android.settings.Settings$DevelopmentSettingsDashboardActivity"),
+                new Intent("com.android.settings.APPLICATION_DEVELOPMENT_SETTINGS"),
                 explicit("com.android.settings.Settings$DevelopmentSettingsActivity"),
                 explicit("com.android.settings.Settings"),
                 new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
