@@ -1,0 +1,59 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing comes from environment variables (set by the GitHub workflow from repo secrets).
+// Without them, the release APK is signed with the debug key so the build still works.
+def ksPath = System.getenv('QM_KEYSTORE')
+def hasKeystore = ksPath != null && file(ksPath).exists()
+
+android {
+    namespace 'com.jeqvid.QuestManager'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.jeqvid.QuestManager'
+        minSdk 23
+        targetSdk 32
+        versionCode 7
+        versionName '2.0'
+    }
+
+    signingConfigs {
+        release {
+            if (hasKeystore) {
+                storeFile file(ksPath)
+                storePassword System.getenv('QM_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('QM_KEY_ALIAS')
+                keyPassword System.getenv('QM_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig hasKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF', 'META-INF/DEPENDENCIES']
+        }
+    }
+}
+
+dependencies {
+    implementation "com.github.MuntashirAkon:libadb-android:${libadbVersion}"
+    // TLS 1.3 + keying-material export needed for wireless debugging pairing
+    implementation 'org.conscrypt:conscrypt-android:2.5.2'
+    // Self-signed certificate for the app's ADB key
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.78.1'
+}
