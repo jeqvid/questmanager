@@ -315,8 +315,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(html("Quest 2 and newer don't need root. Quest Manager talks to the headset's own "
                 + "<b>wireless debugging</b> instead. You only have to pair once.<br><br>"
                 + "1. Make sure the headset is connected to <b>Wi-Fi</b>.<br>"
-                + "2. Tap <b>OPEN ANDROID SETTINGS</b>. An <b>App info</b> window opens: tap <b>OPEN</b> there and the real "
-                + "Android Settings appears. Go to <b>System &gt; Developer options &gt; Wireless debugging</b> and turn it on "
+                + "2. Tap <b>OPEN ANDROID SETTINGS</b>. An <b>App info</b> window opens: tap <b>OPEN</b> (top left) and the "
+                + "real Android Settings appears. Go to <b>System &gt; Developer options &gt; Wireless debugging</b> and turn it on "
                 + "(no Developer options? tap <b>About &gt; Build number</b> 7 times). Keep that window open next to this one.<br>"
                 + "3. Tap <b>Pair device with pairing code</b>. Type the 6-digit code and the port it shows, then tap <b>PAIR</b>.<br>"
                 + "4. On the Wireless debugging screen, type the port shown under <b>IP address &amp; Port</b> "
@@ -325,8 +325,11 @@ public class MainActivity extends Activity implements View.OnHoverListener {
 
         LinearLayout open = row();
         open.addView(button("OPEN ANDROID SETTINGS", v -> openAndroidSettings()), lp(-2, -2, 0, 0));
-        open.addView(button("OPEN DIRECTLY (OLDER FIRMWARE)", v -> openSettingsDirect()), lp(-2, -2, 0, 14));
+        open.addView(button("OTHER METHOD", v -> openAppInfo()), lp(-2, -2, 0, 14));
         page.addView(open);
+        LinearLayout open2 = row();
+        open2.addView(button("NEW WINDOW (OLDER FIRMWARE)", v -> openSettingsDirect()), lp(-2, -2, 0, 0));
+        page.addView(open2);
 
         spacerHeader(page, "PAIR");
         LinearLayout pairRow = row();
@@ -593,17 +596,34 @@ public class MainActivity extends Activity implements View.OnHoverListener {
      * Android Settings. Its OPEN button then starts Android Settings from inside itself (the Lightning Launcher
      * workaround). With shell access it's opened directly instead.
      */
+    /**
+     * Exactly what Lightning Launcher does (seen in the headset's log): open Android Settings' own App info
+     * screen by its component, InstalledAppDetailsTop. Meta redirects the generic "app details" intent to its
+     * own permissions page, but not this component. Tapping OPEN there starts the real Android Settings.
+     */
     private void openAndroidSettings() {
-        // Always via App info, like Lightning Launcher: on v81+ even a shell "am start" of Settings is redirected
-        // to Meta's settings, but App info (part of Android Settings) still opens, and its OPEN button works.
-        Intent appInfo = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", AOSP_SETTINGS, null));
-        appInfo.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setComponent(new ComponentName(AOSP_SETTINGS, "com.android.settings.applications.InstalledAppDetailsTop"))
+                .setData(Uri.fromParts("package", AOSP_SETTINGS, null))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startInWindow(i, "In the App info window, tap OPEN (top left). Android Settings opens.\n"
+                + "Then go to System > Developer options > Wireless debugging.");
+    }
+
+    /** Backup: open Android Settings inside Quest Manager's window. */
+    private void openAppInfo() {
+        Intent i = getPackageManager().getLaunchIntentForPackage(AOSP_SETTINGS);
+        if (i == null) i = launcherIntent("com.android.settings.Settings");
+        i.setFlags(0);
+        startInWindow(i, "If Android Settings opened, go to System > Developer options > Wireless debugging.");
+    }
+
+    private void startInWindow(Intent i, String hint) {
         try {
-            startActivity(appInfo);
-            setupStatus.setText("In the App info window that opened, tap OPEN. Android Settings will appear in a small window.\n"
-                    + "Then go to System > Developer options > Wireless debugging.");
+            startActivity(i);
+            setupStatus.setText(hint);
         } catch (Exception e) {
-            setupStatus.setText("Couldn't open App info (" + e.getMessage() + "). Try OPEN DIRECTLY.");
+            setupStatus.setText("Couldn't open it: " + e.getMessage());
         }
     }
 
