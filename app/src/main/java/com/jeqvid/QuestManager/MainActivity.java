@@ -315,8 +315,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(html("Quest 2 and newer don't need root. Quest Manager talks to the headset's own "
                 + "<b>wireless debugging</b> instead. You only have to pair once.<br><br>"
                 + "1. Make sure the headset is connected to <b>Wi-Fi</b>.<br>"
-                + "2. Tap <b>OPEN ANDROID SETTINGS</b>, go to <b>System &gt; Developer options &gt; Wireless debugging</b> "
-                + "and turn it on. Keep that window open next to this one.<br>"
+                + "2. Tap <b>DEVELOPER OPTIONS</b> (or <b>OPEN ANDROID SETTINGS</b> &gt; System &gt; Developer options), "
+                + "open <b>Wireless debugging</b> and turn it on. Keep that window open next to this one.<br>"
                 + "3. Tap <b>Pair device with pairing code</b>. Type the 6-digit code and the port it shows, then tap <b>PAIR</b>.<br>"
                 + "4. On the Wireless debugging screen, type the port shown under <b>IP address &amp; Port</b> "
                 + "(the number after the colon) and tap <b>CONNECT</b>. Leave it empty to find it automatically.",
@@ -324,6 +324,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
 
         LinearLayout open = row();
         open.addView(button("OPEN ANDROID SETTINGS", v -> openAndroidSettings()), lp(-2, -2, 0, 0));
+        open.addView(button("DEVELOPER OPTIONS", v -> openDeveloperOptions()), lp(-2, -2, 0, 14));
         page.addView(open);
 
         spacerHeader(page, "PAIR");
@@ -584,22 +585,39 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         }
     }
 
+    private static final String AOSP_SETTINGS = "com.android.settings";
+
+    /** Opens the real Android Settings app (not Meta's) by naming its activity directly. */
     private void openAndroidSettings() {
-        Intent[] tries = {
-                new Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS"),
-                new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS),
-                new Intent().setComponent(new ComponentName("com.android.settings", "com.android.settings.Settings")),
-                new Intent(Settings.ACTION_SETTINGS),
-        };
+        launchFirst(
+                explicit("com.android.settings.Settings"),
+                new Intent(Settings.ACTION_SETTINGS));
+    }
+
+    /** Opens Android's Developer options, where Wireless debugging lives. */
+    private void openDeveloperOptions() {
+        launchFirst(
+                explicit("com.android.settings.Settings$DevelopmentSettingsDashboardActivity"),
+                explicit("com.android.settings.Settings$DevelopmentSettingsActivity"),
+                explicit("com.android.settings.Settings"),
+                new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+    }
+
+    private static Intent explicit(String activity) {
+        return new Intent(Intent.ACTION_MAIN).setComponent(new ComponentName(AOSP_SETTINGS, activity));
+    }
+
+    private void launchFirst(Intent... tries) {
         for (Intent i : tries) {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT);
             try {
                 startActivity(i);
                 return;
             } catch (Exception ignored) {
+                // not exported / blocked on this firmware: try the next one
             }
         }
-        setupStatus.setText("Couldn't open Android settings on this headset.");
+        if (setupStatus != null) setupStatus.setText("Couldn't open Android settings on this headset.");
     }
 
     private void openUrl() {
