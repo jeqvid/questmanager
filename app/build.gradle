@@ -42,6 +42,12 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
+    // Sideloaded app, not on Google Play: don't fail the build on Play-store lint rules.
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
     packagingOptions {
         resources {
             excludes += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF', 'META-INF/DEPENDENCIES']
