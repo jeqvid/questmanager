@@ -1,10 +1,14 @@
 package com.jeqvid.QuestManager;
 
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Matrix;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -17,6 +21,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.LinearInterpolator;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -67,6 +72,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private ScrollView scroll;
     private int setupTab = -1;
     private SharedPreferences prefs;
+    private ValueAnimator rainbowAnim;
 
     private boolean quest1;
     private CommandRunner runner;
@@ -99,6 +105,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         TextView brand = header("QUEST\nMANAGER");
         brand.setTextSize(22);
         brand.setLetterSpacing(0.2f);
+        rainbow(brand);
         side.addView(brand);
         side.addView(new View(this), lp(-1, 28, 0, 0));
 
@@ -113,9 +120,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         addTab(side, "RECORDING", recordingPage());
         addTab(side, "EXPERIMENTAL", pageOf(
                 new Setting("EXTRA KICKOFF HEADROOM", "0 or 1", "V80 AND ABOVE", ONE, 0, 1, P + "extraKickoffHeadroom"),
-                new Setting("PHASE SYNC", "0 - 4", "V67 MAX", ONE, 0, 4, P + "phaseSync"),
-                new Setting("PHASE SYNC PADDING", "0 - 4", "V67 MAX", ONE, 0, 4, P + "PhaseSyncAdditionalPadding"),
-                new Setting("PHASE SYNC DELAY", "0 - 4", "V67 MAX", ONE, 0, 4, P + "PhaseSyncDelayOverride"),
+                new Setting("PHASE SYNC", "0 - 4 (sets sync, padding & delay)", "V67 MAX", BOTH, 0, 4,
+                        P + "phaseSync", P + "PhaseSyncAdditionalPadding", P + "PhaseSyncDelayOverride"),
                 new Setting("VSYNC EMULATION", "0 or 1", null, ONE, 0, 1, P + "vsyncEmu")));
 
         side.addView(new View(this), lp(-1, 0, 1f, 0)); // pushes the rest to the bottom
@@ -137,7 +143,31 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (rainbowAnim != null) rainbowAnim.cancel();
         worker.shutdownNow();
+    }
+
+    /** Rainbow gradient that slides across the text forever (shimmer). */
+    private void rainbow(final TextView t) {
+        final int[] colors = {0xffff3b5c, 0xffff9f1c, 0xffffee32, 0xff3dff8b, 0xff2ec8ff, 0xff8a5cff, 0xffff4fd8, 0xffff3b5c};
+        final Matrix matrix = new Matrix();
+        t.addOnLayoutChangeListener((v, l, top, r, b, ol, ot, or, ob) -> {
+            if (r - l != or - ol || t.getPaint().getShader() == null) {
+                t.getPaint().setShader(new LinearGradient(0, 0, Math.max(1, r - l), 0, colors, null, Shader.TileMode.REPEAT));
+            }
+        });
+        rainbowAnim = ValueAnimator.ofFloat(0f, 1f);
+        rainbowAnim.setDuration(2500);
+        rainbowAnim.setRepeatCount(ValueAnimator.INFINITE);
+        rainbowAnim.setInterpolator(new LinearInterpolator());
+        rainbowAnim.addUpdateListener(a -> {
+            Shader shader = t.getPaint().getShader();
+            if (shader == null) return;
+            matrix.setTranslate(t.getWidth() * (Float) a.getAnimatedValue(), 0);
+            shader.setLocalMatrix(matrix);
+            t.invalidate();
+        });
+        rainbowAnim.start();
     }
 
     // ---------------------------------------------------------------- pages
@@ -351,8 +381,19 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         if (s.props.length == 1) {
             return "v=$(getprop " + s.props[0] + "); echo \"current value: ${v:-default}\"";
         }
-        return "w=$(getprop " + s.props[0] + "); h=$(getprop " + s.props[1]
-                + "); echo \"current value: ${w:-default} x ${h:-default}\"";
+        if (s.props.length == 2) {
+            return "w=$(getprop " + s.props[0] + "); h=$(getprop " + s.props[1]
+                    + "); echo \"current value: ${w:-default} x ${h:-default}\"";
+        }
+        // 3+ properties: "current values: phaseSync 3, PhaseSyncAdditionalPadding 3, ..."
+        StringBuilder vars = new StringBuilder(), echo = new StringBuilder("current values: ");
+        for (int i = 0; i < s.props.length; i++) {
+            String name = s.props[i].substring(s.props[i].lastIndexOf('.') + 1);
+            vars.append("v").append(i).append("=$(getprop ").append(s.props[i]).append("); ");
+            if (i > 0) echo.append(", ");
+            echo.append(name).append(' ').append("${v").append(i).append(":-default}");
+        }
+        return vars + "echo \"" + echo + "\"";
     }
 
     private void runCommand(final String cmd, final TextView status, String pending) {
