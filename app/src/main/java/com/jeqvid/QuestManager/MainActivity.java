@@ -598,6 +598,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             return;
         }
         launchFirst(
+                getPackageManager().getLaunchIntentForPackage(AOSP_SETTINGS), // how Lightning Launcher does it
+                launcherIntent("com.android.settings.Settings"),
                 explicit("com.android.settings.Settings"),
                 new Intent(Settings.ACTION_SETTINGS));
     }
@@ -619,12 +621,19 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
     }
 
+    /** Same shape as a home-screen tap: MAIN + LAUNCHER category + component. */
+    private static Intent launcherIntent(String activity) {
+        return new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                .setComponent(new ComponentName(AOSP_SETTINGS, activity));
+    }
+
     private static Intent explicit(String activity) {
         return new Intent(Intent.ACTION_MAIN).setComponent(new ComponentName(AOSP_SETTINGS, activity));
     }
 
     private void launchFirst(Intent... tries) {
         for (Intent i : tries) {
+            if (i == null) continue;
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT);
             try {
                 startActivity(i);
