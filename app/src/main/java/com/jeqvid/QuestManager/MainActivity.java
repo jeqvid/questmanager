@@ -27,6 +27,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -367,6 +368,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         spacerHeader(page, "SETTINGS");
         page.addView(text("Device: " + modelName(), 20, WHITE));
         page.addView(text("Mode: " + runner.name(), 16, 0xffdddddd));
+        page.addView(text("Root status: " + isRooted(), 16, 0xffdddddd));
         if (adb != null) {
             connStatus = text("Wireless ADB: not connected", 16, 0xffdddddd);
             page.addView(connStatus);
@@ -610,6 +612,24 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     // ---------------------------------------------------------------- headset info
     static String modelName() {
         return "Quest".equals(Build.MODEL) ? "Quest 1" : Build.MODEL;
+    }
+
+    /**
+     * True if an su binary (Magisk / Singularity / other root) is present. Only looks for the file,
+     * so it never triggers a root permission popup.
+     */
+    static boolean isRooted() {
+        List<String> dirs = new ArrayList<>();
+        String path = System.getenv("PATH");
+        if (path != null) for (String d : path.split(":")) if (!d.isEmpty()) dirs.add(d);
+        for (String d : new String[]{"/system/bin", "/system/xbin", "/sbin", "/su/bin", "/system/sbin",
+                "/vendor/bin", "/debug_ramdisk", "/data/local/xbin", "/data/local/bin"}) {
+            if (!dirs.contains(d)) dirs.add(d);
+        }
+        for (String d : dirs) {
+            if (new File(d, "su").exists()) return true;
+        }
+        return false;
     }
 
     private static int[] allowedRates() {
