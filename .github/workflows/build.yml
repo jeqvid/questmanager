@@ -14,9 +14,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -41,7 +41,21 @@ jobs:
           QM_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           QM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           QM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleRelease --stacktrace
+        # The ADB library's JitPack versions aren't well documented, so try them in order.
+        run: |
+          for v in v2.2.0 2.2.0 2.1.0 2.0.0 master-SNAPSHOT 1.0.1; do
+            echo "::group::Trying libadb-android $v"
+            if gradle assembleRelease -PlibadbVersion=$v; then
+              echo "::endgroup::"
+              echo "Built with libadb-android $v"
+              echo "### Built with libadb-android $v" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::libadb-android $v did not work, trying the next one"
+          done
+          echo "::error::No libadb-android version worked. Send the log above to Claude."
+          exit 1
 
       - name: Rename APK
         run: |

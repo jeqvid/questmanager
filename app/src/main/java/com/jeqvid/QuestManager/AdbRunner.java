@@ -3,6 +3,8 @@ package com.jeqvid.QuestManager;
 import android.content.Context;
 
 import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 import io.github.muntashirakon.adb.AdbStream;
 
@@ -40,9 +42,24 @@ public class AdbRunner implements CommandRunner {
         return connected;
     }
 
-    /** Finds the wireless debugging port by itself (mDNS). */
+    /**
+     * Finds the wireless debugging port by itself (mDNS). Called by reflection because
+     * older libadb-android versions don't have autoConnect(); then the port must be typed.
+     */
     public boolean autoConnect(long timeoutMs) throws Exception {
-        connected = AdbManager.get(context).autoConnect(context, timeoutMs);
+        AdbManager manager = AdbManager.get(context);
+        Method method;
+        try {
+            method = manager.getClass().getMethod("autoConnect", Context.class, long.class);
+        } catch (NoSuchMethodException e) {
+            throw new Exception("auto-detect isn't available in this build, type the port instead");
+        }
+        try {
+            connected = Boolean.TRUE.equals(method.invoke(manager, context, timeoutMs));
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            throw cause instanceof Exception ? (Exception) cause : new Exception(String.valueOf(cause));
+        }
         return connected;
     }
 
