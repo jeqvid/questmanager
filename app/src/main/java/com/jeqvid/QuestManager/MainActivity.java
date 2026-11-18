@@ -22,7 +22,12 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.LinearInterpolator;
+import android.content.res.ColorStateList;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.SeekBar;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -45,7 +50,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private static final int STATUS = 0xffbdbdbd;
 
     // ---------------------------------------------------------------- settings
-    private static final int HZ = 0, ONE = 1, BOTH = 2, SIZE = 3;
+    private static final int HZ = 0, ONE = 1, BOTH = 2, SIZE = 3, SLIDER = 4;
+    private static final int PURPLE = 0xff8b5cf6;
 
     private static final class Setting {
         final String title, hint, tag;
@@ -53,6 +59,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         final String[] props;
         EditText input;
         TextView status, current;
+        SeekBar slider;
 
         Setting(String title, String hint, String tag, int kind, int lo, int hi, String... props) {
             this.title = title;
@@ -129,7 +136,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 new Setting("EXTRA KICKOFF HEADROOM", "0 or 1", "V80 AND ABOVE", ONE, 0, 1, P + "extraKickoffHeadroom"),
                 new Setting("PHASE SYNC", "0 - 4 (sets sync, padding & delay)", "V67 MAX", BOTH, 0, 4,
                         P + "phaseSync", P + "PhaseSyncAdditionalPadding", P + "PhaseSyncDelayOverride"),
-                new Setting("VSYNC EMULATION", "0 or 1", null, ONE, 0, 1, P + "vsyncEmu")));
+                new Setting("VSYNC EMULATION", "0 - 1", null, SLIDER, 0, 1, P + "vsyncEmu")));
 
         side.addView(new View(this), lp(-1, 0, 1f, 0)); // pushes the rest to the bottom
         if (!quest1) setupTab = addTab(side, "WIRELESS ADB", setupPage());
@@ -141,7 +148,12 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         divider.setBackgroundColor(0xff1c1c1c);
         root.addView(divider, lp(1, -1, 0, 0));
         root.addView(scroll, lp(0, -1, 1f, 0));
-        setContentView(root);
+
+        // Snow falls over everything; it never takes clicks or hover.
+        FrameLayout frame = new FrameLayout(this);
+        frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        frame.addView(new SnowView(this), new FrameLayout.LayoutParams(-1, -1));
+        setContentView(frame);
 
         selectTab(infoTab);
         if (adb != null) startupConnect();
@@ -182,6 +194,10 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             runOnUiThread(() -> {
                 for (Setting s : allSettings) {
                     s.current.setText(r.ok ? "Current: " + describe(s, values) : "Current: couldn't read");
+                    if (r.ok && s.slider != null && !s.input.hasFocus()) {
+                        float v = parseFloat(values.containsKey(s.props[0]) ? values.get(s.props[0]) : "");
+                        if (!Float.isNaN(v)) s.slider.setProgress(Math.round(Math.max(s.lo, Math.min(s.hi, v)) * 10));
+                    }
                 }
             });
         });
@@ -410,6 +426,10 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         s.current = text("Current: ...", 16, 0xffcfcfcf);
         page.addView(s.current);
         allSettings.add(s);
+        if (s.kind == SLIDER) {
+            addSliderControls(page, s);
+            return;
+        }
         LinearLayout r = row();
         s.input = input(s.hint);
         r.addView(s.input, lp(0, -2, 1f, 0));
@@ -420,10 +440,99 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(s.status);
     }
 
+    /** Purple slider (0 to 1, steps of 0.1) with a number box you can also type in, then APPLY / RESET below. */
+    private void addSliderControls(LinearLayout page, final Setting s) {
+        page.addView(text("Value", 14, GREY));
+        LinearLayout r = row();
+        r.setPadding(0, px(4), 0, px(4));
+        final SeekBar bar = new SeekBar(this);
+        bar.setMax(10);
+        bar.setProgressTintList(ColorStateList.valueOf(PURPLE));
+        bar.setThumbTintList(ColorStateList.valueOf(PURPLE));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(0xff3a3a3a));
+        s.slider = bar;
+        r.addView(bar, lp(0, -2, 1f, 0));
+        final EditText box = input("0.0");
+        box.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        box.setGravity(Gravity.CENTER);
+        s.input = box;
+        r.addView(box, lp(100, -2, 0, 16));
+        page.addView(r);
+
+        final boolean[] syncing = {false};
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+                if (syncing[0]) return;
+                syncing[0] = true;
+                box.setText(formatTenths(progress));
+                syncing[0] = false;
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) {
+            }
+        });
+        box.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence c, int a, int b, int d) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence c, int a, int b, int d) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable e) {
+                if (syncing[0]) return;
+                float v = parseFloat(e.toString());
+                if (Float.isNaN(v)) return;
+                syncing[0] = true;
+                bar.setProgress(Math.round(Math.max(s.lo, Math.min(s.hi, v)) * 10));
+                syncing[0] = false;
+            }
+        });
+        box.setText(formatTenths(0));
+
+        LinearLayout buttons = row();
+        buttons.addView(button("APPLY", v -> apply(s)), lp(-2, -2, 0, 0));
+        buttons.addView(button("RESET", v -> reset(s)), lp(-2, -2, 0, 14));
+        page.addView(buttons);
+        s.status = text("", 14, STATUS);
+        page.addView(s.status);
+    }
+
+    private static String formatTenths(int tenths) {
+        return (tenths / 10) + "." + (tenths % 10);
+    }
+
+    private static float parseFloat(String t) {
+        try {
+            return Float.parseFloat(t.trim());
+        } catch (NumberFormatException e) {
+            return Float.NaN;
+        }
+    }
+
     // ---------------------------------------------------------------- actions
     private void apply(Setting s) {
         String text = s.input.getText().toString().trim();
         String cmd;
+        if (s.kind == SLIDER) {
+            float f = parseFloat(text);
+            if (Float.isNaN(f) || f < s.lo || f > s.hi) {
+                s.status.setText("Not applied: pick a value from " + s.lo + " to " + s.hi + ".");
+                return;
+            }
+            int tenths = Math.round(f * 10);
+            String value = tenths % 10 == 0 ? String.valueOf(tenths / 10) : formatTenths(tenths);
+            runCommand("setprop " + s.props[0] + " " + value + " && " + readBack(s), s.status, "Applying...");
+            return;
+        }
         if (s.kind == SIZE) {
             int[] wh = parseSize(text, s.lo, s.hi);
             if (wh == null) {
@@ -489,7 +598,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         worker.execute(() -> {
             final CommandRunner.Result r = runner.run(cmd);
             runOnUiThread(() -> {
-                status.setText(r.ok ? "OK  " + r.output : "Failed: " + r.output);
+                status.setText(r.ok ? "OK  " + r.output : "Failed: " + r.output
+                        + (adb != null && !adb.isReady() ? "\nTap CONNECT in the WIRELESS ADB tab." : ""));
                 if (r.ok && onOk != null) onOk.run();
                 updateConnStatus();
                 refreshCurrent();

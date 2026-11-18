@@ -6,6 +6,12 @@ import android.content.pm.PackageManager;
 import android.provider.Settings;
 
 import java.io.InputStream;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
@@ -157,9 +163,13 @@ public class AdbRunner implements CommandRunner {
         connected = false;
         try {
             AdbManager m = AdbManager.get(context);
-            m.getClass().getMethod("disconnect").invoke(m);
-        } catch (Exception ignored) {
-            // older libadb without disconnect(): a new connect() replaces the connection
+            try {
+                m.getClass().getMethod("disconnect").invoke(m);
+            } catch (NoSuchMethodException e) {
+                m.close(); // older libadb: close() drops the connection; connect() makes a new one
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "disconnect failed", e);
         }
     }
 
@@ -179,7 +189,7 @@ public class AdbRunner implements CommandRunner {
     @Override
     public Result run(String command) {
         Result r = runOnce(command);
-        if (r.output.startsWith(LOST) && reconnect(lastWirelessPort)) {
+        if (r.output.startsWith(LOST) && reconnect(lastWirelessPort, 4)) {
             r = runOnce(command); // the connection dropped (e.g. after a Hz change): reconnected, try again
         }
         return r;
@@ -187,18 +197,28 @@ public class AdbRunner implements CommandRunner {
 
     private static final String LOST = "Lost the wireless ADB connection";
 
-    private Result runOnce(String command) {
+    private Result runOnce(final String command) {
         if (!connected) return new Result(false, LOST + ". Reconnect in the WIRELESS ADB tab.");
         Exception last = null;
         // A quick command can finish (and its stream close) before we start reading. That's not a dropped
         // connection, so open a fresh stream and try again a couple of times before giving up.
         for (int attempt = 0; attempt < 3; attempt++) {
+            Future<Result> f = IO.submit(() -> execOnce(command));
             try {
-                Result r = execOnce(command);
+                Result r = f.get(COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS);
                 if (r != null) return r;
-            } catch (Exception e) {
-                last = e;
-                Log.w(TAG, "shell attempt " + (attempt + 1) + " failed: " + command, e);
+            } catch (TimeoutException te) {
+                // No reply at all: the connection is dead (e.g. the headset slept and Wi-Fi dropped).
+                // Close it so the stuck read ends, and report it as lost so run() reconnects.
+                f.cancel(true);
+                Log.w(TAG, "no reply in " + COMMAND_TIMEOUT_MS + " ms, connection is dead: " + command);
+                disconnectQuietly();
+                return new Result(false, LOST + " (no reply).");
+            } catch (ExecutionException ee) {
+                last = ee.getCause() instanceof Exception ? (Exception) ee.getCause() : ee;
+                Log.w(TAG, "shell attempt " + (attempt + 1) + " failed: " + command, last);
+            } catch (InterruptedException ie) {
+                return new Result(false, "Interrupted.");
             }
             sleep(250);
         }
@@ -206,6 +226,10 @@ public class AdbRunner implements CommandRunner {
         Log.e(TAG, "giving up, treating connection as lost", last);
         return new Result(false, LOST + " (" + (last == null ? "no reply" : last.getMessage()) + "). Reconnect in the WIRELESS ADB tab.");
     }
+
+    /** Commands get their own threads so a dead connection can't block everything behind it. */
+    private static final ExecutorService IO = Executors.newCachedThreadPool();
+    private static final long COMMAND_TIMEOUT_MS = 10000;
 
     /** Runs one shell stream. Returns null if the reply got cut off (caller retries). */
     private Result execOnce(String command) throws Exception {
