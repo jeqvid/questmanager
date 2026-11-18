@@ -25,6 +25,10 @@ import android.view.animation.LinearInterpolator;
 import android.content.res.ColorStateList;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
+import android.text.method.ScrollingMovementMethod;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.SeekBar;
@@ -51,7 +55,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
 
     // ---------------------------------------------------------------- settings
     private static final int HZ = 0, ONE = 1, BOTH = 2, SIZE = 3, SLIDER = 4;
-    private static final int PURPLE = 0xff8b5cf6;
+    private static final int NEON = 0xffc05cff, NEON_LIGHT = 0xffe2a8ff, NEON_TRACK = 0xff2a1a3d;
 
     private static final class Setting {
         final String title, hint, tag;
@@ -132,11 +136,15 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 new Setting("RESOLUTION", "Width & height, e.g. 1440", null, BOTH, 512, 4096,
                         P + "textureWidth", P + "textureHeight")));
         addTab(side, "RECORDING", recordingPage());
+        int maxLevel = Build.MODEL.startsWith("Quest 3") ? 5 : 4; // Quest 3 / 3S have an extra level
+        addTab(side, "CPU & GPU", pageOf(
+                new Setting("CPU LEVEL", "", "HIGHER = FASTER, HOTTER", SLIDER, 0, maxLevel, P + "cpuLevel"),
+                new Setting("GPU LEVEL", "", "HIGHER = FASTER, HOTTER", SLIDER, 0, maxLevel, P + "gpuLevel")));
         addTab(side, "EXPERIMENTAL", pageOf(
-                new Setting("EXTRA KICKOFF HEADROOM", "0 or 1", "V80 AND ABOVE", ONE, 0, 1, P + "extraKickoffHeadroom"),
-                new Setting("PHASE SYNC", "0 - 4 (sets sync, padding & delay)", "V67 MAX", BOTH, 0, 4,
+                new Setting("EXTRA KICKOFF HEADROOM", "", "V80 AND ABOVE", SLIDER, 0, 1, P + "extraKickoffHeadroom"),
+                new Setting("PHASE SYNC", "", "V67 MAX  -  SETS SYNC, PADDING & DELAY", SLIDER, 0, 4,
                         P + "phaseSync", P + "PhaseSyncAdditionalPadding", P + "PhaseSyncDelayOverride"),
-                new Setting("VSYNC EMULATION", "0 - 1", null, SLIDER, 0, 1, P + "vsyncEmu")));
+                new Setting("VSYNC EMULATION", "", null, SLIDER, 0, 1, P + "vsyncEmu")));
 
         side.addView(new View(this), lp(-1, 0, 1f, 0)); // pushes the rest to the bottom
         if (!quest1) setupTab = addTab(side, "WIRELESS ADB", setupPage());
@@ -147,7 +155,11 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         View divider = new View(this);
         divider.setBackgroundColor(0xff1c1c1c);
         root.addView(divider, lp(1, -1, 0, 0));
-        root.addView(scroll, lp(0, -1, 1f, 0));
+        LinearLayout right = new LinearLayout(this);
+        right.setOrientation(LinearLayout.VERTICAL);
+        right.addView(scroll, lp(-1, 0, 1f, 0));
+        right.addView(adbBar());
+        root.addView(right, lp(0, -1, 1f, 0));
 
         // Snow falls over everything; it never takes clicks or hover.
         FrameLayout frame = new FrameLayout(this);
@@ -195,8 +207,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 for (Setting s : allSettings) {
                     s.current.setText(r.ok ? "Current: " + describe(s, values) : "Current: couldn't read");
                     if (r.ok && s.slider != null && !s.input.hasFocus()) {
-                        float v = parseFloat(values.containsKey(s.props[0]) ? values.get(s.props[0]) : "");
-                        if (!Float.isNaN(v)) s.slider.setProgress(Math.round(Math.max(s.lo, Math.min(s.hi, v)) * 10));
+                        int v = parseInt(values.containsKey(s.props[0]) ? values.get(s.props[0]) : "");
+                        if (v >= 0) s.slider.setProgress(Math.max(s.lo, Math.min(s.hi, v)) - s.lo);
                     }
                 }
             });
@@ -440,23 +452,22 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(s.status);
     }
 
-    /** Purple slider (0 to 1, steps of 0.1) with a number box you can also type in, then APPLY / RESET below. */
+    /** Neon slider with a number box you can also type in, then APPLY / RESET below. Whole numbers only. */
     private void addSliderControls(LinearLayout page, final Setting s) {
         page.addView(text("Value", 14, GREY));
         LinearLayout r = row();
         r.setPadding(0, px(4), 0, px(4));
         final SeekBar bar = new SeekBar(this);
-        bar.setMax(10);
-        bar.setProgressTintList(ColorStateList.valueOf(PURPLE));
-        bar.setThumbTintList(ColorStateList.valueOf(PURPLE));
-        bar.setProgressBackgroundTintList(ColorStateList.valueOf(0xff3a3a3a));
+        bar.setMax(s.hi - s.lo);
+        neon(bar);
         s.slider = bar;
-        r.addView(bar, lp(0, -2, 1f, 0));
-        final EditText box = input("0.0");
-        box.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        r.addView(bar, lp(0, 40, 1f, 0));
+        final EditText box = input(String.valueOf(s.lo));
         box.setGravity(Gravity.CENTER);
+        box.setTextColor(NEON_LIGHT);
+        box.setBackground(rounded(0xff120a1c, 36, px(2), NEON));
         s.input = box;
-        r.addView(box, lp(100, -2, 0, 16));
+        r.addView(box, lp(90, -2, 0, 16));
         page.addView(r);
 
         final boolean[] syncing = {false};
@@ -465,7 +476,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 if (syncing[0]) return;
                 syncing[0] = true;
-                box.setText(formatTenths(progress));
+                box.setText(String.valueOf(s.lo + progress));
                 syncing[0] = false;
             }
 
@@ -489,14 +500,14 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             @Override
             public void afterTextChanged(Editable e) {
                 if (syncing[0]) return;
-                float v = parseFloat(e.toString());
-                if (Float.isNaN(v)) return;
+                int v = parseInt(e.toString());
+                if (v < 0) return;
                 syncing[0] = true;
-                bar.setProgress(Math.round(Math.max(s.lo, Math.min(s.hi, v)) * 10));
+                bar.setProgress(Math.max(s.lo, Math.min(s.hi, v)) - s.lo);
                 syncing[0] = false;
             }
         });
-        box.setText(formatTenths(0));
+        box.setText(String.valueOf(s.lo));
 
         LinearLayout buttons = row();
         buttons.addView(button("APPLY", v -> apply(s)), lp(-2, -2, 0, 0));
@@ -506,16 +517,97 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(s.status);
     }
 
-    private static String formatTenths(int tenths) {
-        return (tenths / 10) + "." + (tenths % 10);
+    /** Thick glowing neon-purple track and a glowing thumb. */
+    private void neon(SeekBar bar) {
+        GradientDrawable track = rounded(NEON_TRACK, 100, 0, 0);
+        GradientDrawable fill = rounded(NEON, 100, 0, 0);
+        LayerDrawable progress = new LayerDrawable(new Drawable[]{track, new ClipDrawable(fill, Gravity.START, ClipDrawable.HORIZONTAL)});
+        progress.setId(0, android.R.id.background);
+        progress.setId(1, android.R.id.progress);
+        for (int i = 0; i < 2; i++) {
+            progress.setLayerGravity(i, Gravity.CENTER_VERTICAL | Gravity.FILL_HORIZONTAL);
+            progress.setLayerHeight(i, px(8));
+        }
+        bar.setProgressDrawable(progress);
+
+        GradientDrawable glow = new GradientDrawable();
+        glow.setShape(GradientDrawable.OVAL);
+        glow.setColor(0x66c05cff);
+        glow.setSize(px(30), px(30));
+        GradientDrawable core = new GradientDrawable();
+        core.setShape(GradientDrawable.OVAL);
+        core.setColor(NEON_LIGHT);
+        core.setStroke(px(2), Color.WHITE);
+        LayerDrawable thumb = new LayerDrawable(new Drawable[]{glow, core});
+        thumb.setLayerInset(1, px(7), px(7), px(7), px(7));
+        bar.setThumb(thumb);
+        bar.setSplitTrack(false);
+        bar.setPadding(px(16), 0, px(16), 0);
     }
 
-    private static float parseFloat(String t) {
-        try {
-            return Float.parseFloat(t.trim());
-        } catch (NumberFormatException e) {
-            return Float.NaN;
+    // ---------------------------------------------------------------- ADB command line
+    private EditText adbInput;
+    private TextView adbOutput;
+
+    /** "ADB" box pinned under every page: type any adb shell command and see its output. */
+    private View adbBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.VERTICAL);
+        bar.setBackgroundColor(0xff050505);
+        bar.setPadding(px(36), px(6), px(36), px(10));
+        View line = new View(this);
+        line.setBackgroundColor(0xff1c1c1c);
+        bar.addView(line, lp(-1, 1, 0, 0));
+        TextView title = text("ADB", 18, WHITE);
+        title.setTypeface(Typeface.create("sans-serif-black", Typeface.NORMAL));
+        title.setLetterSpacing(0.15f);
+        bar.addView(title);
+        LinearLayout r = row();
+        r.setPadding(0, 0, 0, px(4));
+        adbInput = input("e.g. getprop ro.build.version.release");
+        adbInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        adbInput.setTypeface(Typeface.MONOSPACE);
+        adbInput.setTextSize(15);
+        r.addView(adbInput, lp(0, -2, 1f, 0));
+        r.addView(button("RUN", v -> runAdbLine()), lp(-2, -2, 0, 14));
+        bar.addView(r);
+        adbOutput = text("", 13, 0xffcfcfcf);
+        adbOutput.setTypeface(Typeface.MONOSPACE);
+        adbOutput.setMaxLines(5);
+        adbOutput.setVerticalScrollBarEnabled(true);
+        adbOutput.setMovementMethod(new ScrollingMovementMethod());
+        bar.addView(adbOutput);
+        return bar;
+    }
+
+    private void runAdbLine() {
+        String cmd = adbInput.getText().toString().trim();
+        if (cmd.startsWith("adb shell ")) cmd = cmd.substring("adb shell ".length()).trim();
+        else if (cmd.equals("adb shell")) cmd = "";
+        else if (cmd.startsWith("adb ")) {
+            adbOutput.setText("Only shell commands work here. Type the part after \"adb shell\".");
+            return;
         }
+        if (cmd.isEmpty()) {
+            adbOutput.setText("Type a command first.");
+            return;
+        }
+        if (!runner.isReady()) {
+            adbOutput.setText("Not connected. Set up wireless ADB first.");
+            if (setupTab >= 0) selectTab(setupTab);
+            return;
+        }
+        final String command = cmd;
+        adbOutput.setText("$ " + command + "\nRunning...");
+        worker.execute(() -> {
+            final CommandRunner.Result r = runner.run(command);
+            runOnUiThread(() -> {
+                String out = r.output.isEmpty() ? (r.ok ? "(no output)" : "") : r.output;
+                adbOutput.setText("$ " + command + "\n" + (r.ok ? out : "Failed: " + out));
+                adbOutput.scrollTo(0, 0);
+                refreshCurrent();
+            });
+        });
     }
 
     // ---------------------------------------------------------------- actions
@@ -523,14 +615,17 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         String text = s.input.getText().toString().trim();
         String cmd;
         if (s.kind == SLIDER) {
-            float f = parseFloat(text);
-            if (Float.isNaN(f) || f < s.lo || f > s.hi) {
+            int v = parseInt(text);
+            if (v < s.lo || v > s.hi) {
                 s.status.setText("Not applied: pick a value from " + s.lo + " to " + s.hi + ".");
                 return;
             }
-            int tenths = Math.round(f * 10);
-            String value = tenths % 10 == 0 ? String.valueOf(tenths / 10) : formatTenths(tenths);
-            runCommand("setprop " + s.props[0] + " " + value + " && " + readBack(s), s.status, "Applying...");
+            StringBuilder b = new StringBuilder();
+            for (String p : s.props) {
+                if (b.length() > 0) b.append(" && ");
+                b.append("setprop ").append(p).append(' ').append(v);
+            }
+            runCommand(b + " && " + readBack(s), s.status, "Applying...");
             return;
         }
         if (s.kind == SIZE) {
