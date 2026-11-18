@@ -29,6 +29,7 @@ import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
 import android.text.method.ScrollingMovementMethod;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.SeekBar;
@@ -91,6 +92,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private int setupTab = -1;
     private SharedPreferences prefs;
     private ValueAnimator rainbowAnim;
+    private SnowView snow;
 
     private boolean quest1;
     private CommandRunner runner;
@@ -140,11 +142,14 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         addTab(side, "CPU & GPU", pageOf(
                 new Setting("CPU LEVEL", "", "HIGHER = FASTER, HOTTER", SLIDER, 0, maxLevel, P + "cpuLevel"),
                 new Setting("GPU LEVEL", "", "HIGHER = FASTER, HOTTER", SLIDER, 0, maxLevel, P + "gpuLevel")));
-        addTab(side, "EXPERIMENTAL", pageOf(
+        LinearLayout experimental = pageOf(
                 new Setting("EXTRA KICKOFF HEADROOM", "", "V80 AND ABOVE", SLIDER, 0, 1, P + "extraKickoffHeadroom"),
                 new Setting("PHASE SYNC", "", "V67 MAX  -  SETS SYNC, PADDING & DELAY", SLIDER, 0, 4,
                         P + "phaseSync", P + "PhaseSyncAdditionalPadding", P + "PhaseSyncDelayOverride"),
-                new Setting("VSYNC EMULATION", "", null, SLIDER, 0, 1, P + "vsyncEmu")));
+                new Setting("VSYNC EMULATION", "", null, SLIDER, 0, 1, P + "vsyncEmu"));
+        addProximitySection(experimental);
+        addAdbSection(experimental);
+        addTab(side, "EXPERIMENTAL", experimental);
 
         side.addView(new View(this), lp(-1, 0, 1f, 0)); // pushes the rest to the bottom
         if (!quest1) setupTab = addTab(side, "WIRELESS ADB", setupPage());
@@ -155,16 +160,14 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         View divider = new View(this);
         divider.setBackgroundColor(0xff1c1c1c);
         root.addView(divider, lp(1, -1, 0, 0));
-        LinearLayout right = new LinearLayout(this);
-        right.setOrientation(LinearLayout.VERTICAL);
-        right.addView(scroll, lp(-1, 0, 1f, 0));
-        right.addView(adbBar());
-        root.addView(right, lp(0, -1, 1f, 0));
+        root.addView(scroll, lp(0, -1, 1f, 0));
 
         // Snow falls over everything; it never takes clicks or hover.
         FrameLayout frame = new FrameLayout(this);
         frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
-        frame.addView(new SnowView(this), new FrameLayout.LayoutParams(-1, -1));
+        snow = new SnowView(this);
+        snow.setVisibility(prefs.getBoolean("snow", true) ? View.VISIBLE : View.GONE);
+        frame.addView(snow, new FrameLayout.LayoutParams(-1, -1));
         setContentView(frame);
 
         selectTab(infoTab);
@@ -403,6 +406,19 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(text("Device: " + modelName(), 20, WHITE));
         page.addView(text("Mode: " + runner.name(), 16, 0xffdddddd));
         page.addView(text("Root status: " + isRooted(), 16, 0xffdddddd));
+        page.addView(new View(this), lp(-1, 16, 0, 0));
+        CheckBox snowBox = new CheckBox(this);
+        snowBox.setText("Snow");
+        snowBox.setTextColor(WHITE);
+        snowBox.setTextSize(18);
+        snowBox.setButtonTintList(ColorStateList.valueOf(NEON));
+        snowBox.setChecked(prefs.getBoolean("snow", true));
+        snowBox.setOnHoverListener(this);
+        snowBox.setOnCheckedChangeListener((b, on) -> {
+            prefs.edit().putBoolean("snow", on).apply();
+            if (snow != null) snow.setVisibility(on ? View.VISIBLE : View.GONE);
+        });
+        page.addView(snowBox);
         if (adb != null) {
             connStatus = text("Wireless ADB: not connected", 16, 0xffdddddd);
             page.addView(connStatus);
@@ -410,6 +426,10 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             r.addView(button("WIRELESS ADB SETUP", v -> selectTab(setupTab)), lp(-2, -2, 0, 0));
             page.addView(r);
         }
+        return page;
+    }
+
+    private void addProximitySection(LinearLayout page) {
         spacerHeader(page, "PROXIMITY SENSOR");
         proxCurrent = text("Current: ...", 16, 0xffcfcfcf);
         page.addView(proxCurrent);
@@ -423,7 +443,6 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(r);
         proxStatus = text("", 14, STATUS);
         page.addView(proxStatus);
-        return page;
     }
 
     private void addSection(LinearLayout page, final Setting s) {
@@ -549,35 +568,25 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private EditText adbInput;
     private TextView adbOutput;
 
-    /** "ADB" box pinned under every page: type any adb shell command and see its output. */
-    private View adbBar() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.VERTICAL);
-        bar.setBackgroundColor(0xff050505);
-        bar.setPadding(px(36), px(6), px(36), px(10));
-        View line = new View(this);
-        line.setBackgroundColor(0xff1c1c1c);
-        bar.addView(line, lp(-1, 1, 0, 0));
-        TextView title = text("ADB", 18, WHITE);
-        title.setTypeface(Typeface.create("sans-serif-black", Typeface.NORMAL));
-        title.setLetterSpacing(0.15f);
-        bar.addView(title);
+    /** ADB section (Experimental tab): type any adb shell command and see its output. */
+    private void addAdbSection(LinearLayout page) {
+        spacerHeader(page, "ADB");
         LinearLayout r = row();
-        r.setPadding(0, 0, 0, px(4));
         adbInput = input("e.g. getprop ro.build.version.release");
         adbInput.setInputType(InputType.TYPE_CLASS_TEXT);
         adbInput.setTypeface(Typeface.MONOSPACE);
         adbInput.setTextSize(15);
         r.addView(adbInput, lp(0, -2, 1f, 0));
         r.addView(button("RUN", v -> runAdbLine()), lp(-2, -2, 0, 14));
-        bar.addView(r);
+        page.addView(r);
         adbOutput = text("", 13, 0xffcfcfcf);
         adbOutput.setTypeface(Typeface.MONOSPACE);
-        adbOutput.setMaxLines(5);
+        adbOutput.setBackground(rounded(0xff0a0a0a, 24, px(1), 0xff2a2a2a));
+        pad(adbOutput, 14, 10);
+        adbOutput.setMaxLines(12);
         adbOutput.setVerticalScrollBarEnabled(true);
         adbOutput.setMovementMethod(new ScrollingMovementMethod());
-        bar.addView(adbOutput);
-        return bar;
+        page.addView(adbOutput);
     }
 
     private void runAdbLine() {
