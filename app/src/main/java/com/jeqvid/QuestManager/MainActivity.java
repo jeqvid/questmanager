@@ -320,16 +320,15 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 + "(no Developer options? tap <b>About &gt; Build number</b> 7 times). Keep that window open next to this one.<br>"
                 + "3. Tap <b>Pair device with pairing code</b>. Type the 6-digit code and the port it shows, then tap <b>PAIR</b>.<br>"
                 + "4. On the Wireless debugging screen, type the port shown under <b>IP address &amp; Port</b> "
-                + "(the number after the colon) and tap <b>CONNECT</b>. Leave it empty to find it automatically.",
+                + "(the number after the colon) and tap <b>CONNECT</b>. Leave it empty to find it automatically.<br><br>"
+                + "After that, Quest Manager stays connected by itself until you restart the headset, even if wireless "
+                + "debugging switches off. The pairing never expires. After a restart, just turn Wireless debugging on "
+                + "again; no need to pair again. If an <b>Allow debugging?</b> popup appears, tick <b>Always allow</b>.",
                 15, 0xffdddddd));
 
         LinearLayout open = row();
         open.addView(button("OPEN ANDROID SETTINGS", v -> openAndroidSettings()), lp(-2, -2, 0, 0));
-        open.addView(button("OTHER METHOD", v -> openAppInfo()), lp(-2, -2, 0, 14));
         page.addView(open);
-        LinearLayout open2 = row();
-        open2.addView(button("NEW WINDOW (OLDER FIRMWARE)", v -> openSettingsDirect()), lp(-2, -2, 0, 0));
-        page.addView(open2);
 
         spacerHeader(page, "PAIR");
         LinearLayout pairRow = row();
@@ -510,23 +509,15 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private void startupConnect() {
         final int saved = prefs.getInt("port", 0);
         setupStatus.setText("Looking for wireless debugging...");
+        adb.setLastWirelessPort(saved);
         worker.execute(() -> {
-            boolean ok = false;
-            try {
-                if (saved > 0) ok = adb.connect(saved);
-            } catch (Exception ignored) {
-            }
-            if (!ok) {
-                try {
-                    ok = adb.autoConnect(4000);
-                } catch (Exception ignored) {
-                }
-            }
+            boolean ok = adb.reconnect(saved); // fixed port 5555 first, then saved port, then auto-detect
+            final String lock = ok ? adb.makeStable() : null;
             final boolean connected = ok;
             runOnUiThread(() -> {
                 updateConnStatus();
                 if (connected) {
-                    setupStatus.setText("Connected to wireless ADB.");
+                    setupStatus.setText("Connected to wireless ADB. " + lock);
                     refreshCurrent();
                 } else {
                     setupStatus.setText("Not connected yet. Follow the steps above.");
@@ -566,8 +557,11 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             try {
                 boolean ok = port > 0 ? adb.connect(port) : adb.autoConnect(6000);
                 if (ok) {
-                    if (port > 0) prefs.edit().putInt("port", port).apply();
-                    msg = "Connected to wireless ADB. You're good to go!";
+                    if (port > 0) {
+                        prefs.edit().putInt("port", port).apply();
+                        adb.setLastWirelessPort(port);
+                    }
+                    msg = "Connected! " + adb.makeStable();
                 } else {
                     msg = "Couldn't connect. Is Wireless debugging on, and is the device paired?";
                 }
@@ -610,14 +604,6 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 + "Then go to System > Developer options > Wireless debugging.");
     }
 
-    /** Backup: open Android Settings inside Quest Manager's window. */
-    private void openAppInfo() {
-        Intent i = getPackageManager().getLaunchIntentForPackage(AOSP_SETTINGS);
-        if (i == null) i = launcherIntent("com.android.settings.Settings");
-        i.setFlags(0);
-        startInWindow(i, "If Android Settings opened, go to System > Developer options > Wireless debugging.");
-    }
-
     private void startInWindow(Intent i, String hint) {
         try {
             startActivity(i);
@@ -625,39 +611,6 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         } catch (Exception e) {
             setupStatus.setText("Couldn't open it: " + e.getMessage());
         }
-    }
-
-    /** Older firmware (before v81) can still open Android Settings directly. */
-    private void openSettingsDirect() {
-        launchFirst(
-                getPackageManager().getLaunchIntentForPackage(AOSP_SETTINGS),
-                launcherIntent("com.android.settings.Settings"),
-                explicit("com.android.settings.Settings"),
-                new Intent(Settings.ACTION_SETTINGS));
-    }
-
-    /** Same shape as a home-screen tap: MAIN + LAUNCHER category + component. */
-    private static Intent launcherIntent(String activity) {
-        return new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                .setComponent(new ComponentName(AOSP_SETTINGS, activity));
-    }
-
-    private static Intent explicit(String activity) {
-        return new Intent(Intent.ACTION_MAIN).setComponent(new ComponentName(AOSP_SETTINGS, activity));
-    }
-
-    private void launchFirst(Intent... tries) {
-        for (Intent i : tries) {
-            if (i == null) continue;
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT);
-            try {
-                startActivity(i);
-                return;
-            } catch (Exception ignored) {
-                // not exported / blocked on this firmware: try the next one
-            }
-        }
-        if (setupStatus != null) setupStatus.setText("Couldn't open Android settings on this headset.");
     }
 
     private void openUrl() {
