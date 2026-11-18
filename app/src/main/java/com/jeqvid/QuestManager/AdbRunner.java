@@ -1,6 +1,7 @@
 package com.jeqvid.QuestManager;
 
 import android.content.Context;
+import android.util.Log;
 import android.content.pm.PackageManager;
 import android.provider.Settings;
 
@@ -49,7 +50,13 @@ public class AdbRunner implements CommandRunner {
 
     /** Connects to the port shown under "IP address & Port". */
     public boolean connect(int port) throws Exception {
-        connected = AdbManager.get(context).connect(HOST, port);
+        try {
+            connected = AdbManager.get(context).connect(HOST, port);
+        } catch (Exception e) {
+            Log.w(TAG, "connect(" + port + ") failed", e);
+            throw e;
+        }
+        Log.i(TAG, "connect(" + port + ") = " + connected);
         connectedPort = connected ? port : 0;
         return connected;
     }
@@ -81,9 +88,13 @@ public class AdbRunner implements CommandRunner {
      * back on by itself when it turns off (after a display change or a restart). Returns a short UI message.
      */
     public String makeStable() {
-        Result r = run("settings put global adb_allowed_connection_time 0; pm grant " + context.getPackageName() + " " + WRITE_SECURE);
-        return r.ok ? "Pairing saved for good: Quest Manager reconnects by itself from now on."
-                : "Connected (couldn't save the auto-reconnect setting: " + r.output + ").";
+        Result keep = run("settings put global adb_allowed_connection_time 0");
+        Result grant = run("pm grant " + context.getPackageName() + " " + WRITE_SECURE);
+        Log.i(TAG, "makeStable: keep=" + keep.ok + " '" + keep.output + "' grant=" + grant.ok + " '" + grant.output + "'");
+        if (keep.ok && grant.ok) return "Pairing saved for good: Quest Manager reconnects by itself from now on.";
+        if (!connected) return "Connected, but the connection dropped right after (" + grant.output + ").";
+        return "Connected. (Auto-reconnect setup: " + (keep.ok ? "" : "keep-pairing failed: " + keep.output + " ")
+                + (grant.ok ? "" : "permission failed: " + grant.output) + ")";
     }
 
     /**
@@ -164,32 +175,60 @@ public class AdbRunner implements CommandRunner {
 
     private Result runOnce(String command) {
         if (!connected) return new Result(false, LOST + ". Reconnect in the WIRELESS ADB tab.");
-        AdbStream stream = null;
-        try {
-            stream = AdbManager.get(context).openStream("shell:(" + command + ") 2>&1; echo " + RC_MARK + "$?");
-            InputStream in = stream.openInputStream();
-            String out = Streams.readAll(in);
-            int mark = out.lastIndexOf(RC_MARK);
-            if (mark < 0) return new Result(false, "No reply from the headset.\n" + out);
-            String body = out.substring(0, mark);
-            int code;
+        Exception last = null;
+        // A quick command can finish (and its stream close) before we start reading. That's not a dropped
+        // connection, so open a fresh stream and try again a couple of times before giving up.
+        for (int attempt = 0; attempt < 3; attempt++) {
             try {
-                code = Integer.parseInt(out.substring(mark + RC_MARK.length()).trim());
-            } catch (NumberFormatException e) {
-                code = -1;
+                Result r = execOnce(command);
+                if (r != null) return r;
+            } catch (Exception e) {
+                last = e;
+                Log.w(TAG, "shell attempt " + (attempt + 1) + " failed: " + command, e);
             }
-            if (code == 0) return new Result(true, body);
-            return new Result(false, "exit code " + code + (body.trim().isEmpty() ? "" : "\n" + body.trim()));
-        } catch (Exception e) {
-            connected = false;
-            return new Result(false, LOST + " (" + e.getMessage() + "). Reconnect in the WIRELESS ADB tab.");
+            sleep(250);
+        }
+        connected = false;
+        Log.e(TAG, "giving up, treating connection as lost", last);
+        return new Result(false, LOST + " (" + (last == null ? "no reply" : last.getMessage()) + "). Reconnect in the WIRELESS ADB tab.");
+    }
+
+    /** Runs one shell stream. Returns null if the reply got cut off (caller retries). */
+    private Result execOnce(String command) throws Exception {
+        AdbStream stream = AdbManager.get(context).openStream("shell:(" + command + ") 2>&1; echo " + RC_MARK + "$?");
+        StringBuilder out = new StringBuilder();
+        try {
+            InputStream in = stream.openInputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            try {
+                while ((n = in.read(buf)) != -1) out.append(new String(buf, 0, n, "UTF-8"));
+            } catch (java.io.IOException closed) {
+                // stream closed under us: keep whatever arrived, the marker decides if it's complete
+                Log.w(TAG, "stream closed while reading (" + out.length() + " chars so far)", closed);
+            }
         } finally {
-            if (stream != null) {
-                try {
-                    stream.close();
-                } catch (Exception ignored) {
-                }
+            try {
+                stream.close();
+            } catch (Exception ignored) {
             }
         }
+        String all = out.toString();
+        int mark = all.lastIndexOf(RC_MARK);
+        if (mark < 0) {
+            Log.w(TAG, "no exit marker in reply: '" + all + "'");
+            return null;
+        }
+        String body = all.substring(0, mark);
+        int code;
+        try {
+            code = Integer.parseInt(all.substring(mark + RC_MARK.length()).trim());
+        } catch (NumberFormatException e) {
+            code = -1;
+        }
+        if (code == 0) return new Result(true, body);
+        return new Result(false, "exit code " + code + (body.trim().isEmpty() ? "" : "\n" + body.trim()));
     }
+
+    private static final String TAG = "QuestManager";
 }
