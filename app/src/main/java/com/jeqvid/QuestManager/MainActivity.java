@@ -70,6 +70,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     // ---------------------------------------------------------------- state
     // Static: survives the window being recreated, so a running command or reconnect isn't killed.
     private static final ExecutorService worker = Executors.newSingleThreadExecutor();
+    // PAIR / CONNECT run here so they never wait behind a background reconnect or a command.
+    private static final ExecutorService setupWorker = Executors.newCachedThreadPool();
     private final List<TextView> tabs = new ArrayList<>();
     private final List<View> pages = new ArrayList<>();
     private final List<Setting> allSettings = new ArrayList<>();
@@ -503,7 +505,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         worker.execute(() -> {
             // Still connected (window was just recreated)? Keep it. Otherwise reconnect by itself.
             if (!adb.isReady()) adb.enableWirelessDebugging(); // after a restart it's off: switch it on (if allowed)
-            boolean ok = adb.isReady() || adb.reconnect(saved);
+            boolean ok = adb.isReady() || adb.reconnect(saved, 2); // quick: 2 rounds, cancelled by PAIR/CONNECT
             final String lock = ok ? adb.makeStable() : null;
             final boolean connected = ok;
             runOnUiThread(() -> {
@@ -527,7 +529,15 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             return;
         }
         setupStatus.setText("Pairing...");
-        worker.execute(() -> {
+        adb.cancelReconnect();
+        final long started = System.currentTimeMillis();
+        setupStatus.postDelayed(() -> {
+            if ("Pairing...".contentEquals(setupStatus.getText()) && System.currentTimeMillis() - started >= 19000) {
+                setupStatus.setText("Still pairing... Make sure the pairing code window is still open in Android Settings "
+                        + "(the code and port change every time it opens).");
+            }
+        }, 20000);
+        setupWorker.execute(() -> {
             String msg;
             try {
                 msg = adb.pair(port, code)
@@ -544,7 +554,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private void doConnect() {
         final int port = parseInt(connectPort.getText().toString().trim());
         setupStatus.setText(port > 0 ? "Connecting..." : "Searching for the wireless debugging port...");
-        worker.execute(() -> {
+        adb.cancelReconnect();
+        setupWorker.execute(() -> {
             String msg;
             try {
                 boolean ok = false;

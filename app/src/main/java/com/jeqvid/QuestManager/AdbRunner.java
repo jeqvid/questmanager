@@ -102,19 +102,33 @@ public class AdbRunner implements CommandRunner {
      * the last wireless debugging port, then auto-detect (the port changes when Wireless debugging restarts). If it
      * got switched off, it switches it back on by itself (needs WRITE_SECURE_SETTINGS, which makeStable() grants).
      */
-    public synchronized boolean reconnect(int lastWirelessPort) {
+    public boolean reconnect(int lastWirelessPort) {
+        return reconnect(lastWirelessPort, 6);
+    }
+
+    /** Same, with a chosen number of rounds. Stops early if the user starts pairing/connecting by hand. */
+    public synchronized boolean reconnect(int lastWirelessPort, int rounds) {
+        cancelled = false;
         disconnectQuietly();
         boolean reenabled = false;
-        for (int attempt = 0; attempt < 6; attempt++) {
+        for (int attempt = 0; attempt < rounds && !cancelled; attempt++) {
             if (lastWirelessPort > 0 && tryConnect(lastWirelessPort)) return true;
+            if (cancelled) break;
             try {
                 if (autoConnect(3000)) return true;
             } catch (Exception ignored) {
             }
             if (!reenabled) reenabled = enableWirelessDebugging(); // it may have switched off: turn it back on
-            sleep(1500);
+            if (attempt + 1 < rounds) sleep(1500);
         }
         return false;
+    }
+
+    private volatile boolean cancelled;
+
+    /** Stops a background reconnect (called when the user taps PAIR or CONNECT). */
+    public void cancelReconnect() {
+        cancelled = true;
     }
 
     /** Turns Android's Wireless debugging back on, if Quest Manager has been allowed to. */
