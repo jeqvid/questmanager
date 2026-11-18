@@ -68,7 +68,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     private static final String P = "debug.oculus.";
 
     // ---------------------------------------------------------------- state
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    // Static: survives the window being recreated, so a running command or reconnect isn't killed.
+    private static final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final List<TextView> tabs = new ArrayList<>();
     private final List<View> pages = new ArrayList<>();
     private final List<Setting> allSettings = new ArrayList<>();
@@ -95,7 +96,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         if (quest1) {
             runner = new RootRunner();
         } else {
-            adb = new AdbRunner(this);
+            adb = AdbRunner.get(this);
             runner = adb;
         }
 
@@ -116,7 +117,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         scroll = new ScrollView(this);
 
         addTab(side, "REFRESH RATE", pageOf(
-                new Setting("REFRESH RATE", "Hz, e.g. 72", null, HZ, 0, 0, P + "refreshRate"),
+                new Setting("REFRESH RATE", "Hz, 1 - 1000", null, HZ, 1, 1000, P + "refreshRate"),
                 new Setting("SWAP INTERVAL", "e.g. 1", null, ONE, 1, 4, P + "swapInterval")));
         addTab(side, "RESOLUTION", pageOf(
                 new Setting("RESOLUTION", "Width & height, e.g. 1440", null, BOTH, 512, 4096,
@@ -148,7 +149,6 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     protected void onDestroy() {
         super.onDestroy();
         if (rainbowAnim != null) rainbowAnim.cancel();
-        worker.shutdownNow();
     }
 
     @Override
@@ -431,17 +431,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
             cmd = "setprop " + s.props[0] + " " + wh[0] + " && setprop " + s.props[1] + " " + wh[1];
         } else {
             int v = parseInt(text);
-            if (s.kind == HZ) {
-                if (v < 0) {
-                    s.status.setText("Type a whole number first.");
-                    return;
-                }
-                int[] allowed = allowedRates();
-                if (!contains(allowed, v)) {
-                    s.status.setText("Not applied: " + v + " Hz isn't supported on " + modelName() + ". Allowed: " + join(allowed));
-                    return;
-                }
-            } else if (v < s.lo || v > s.hi) {
+            if (v < s.lo || v > s.hi) {
                 s.status.setText("Not applied: type a whole number from " + s.lo + " to " + s.hi + ".");
                 return;
             }
@@ -511,7 +501,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         setupStatus.setText("Looking for wireless debugging...");
         adb.setLastWirelessPort(saved);
         worker.execute(() -> {
-            boolean ok = adb.reconnect(saved); // fixed port 5555 first, then saved port, then auto-detect
+            // Still connected (window was just recreated)? Keep it. Otherwise reconnect by itself.
+            boolean ok = adb.isReady() || adb.reconnect(saved);
             final String lock = ok ? adb.makeStable() : null;
             final boolean connected = ok;
             runOnUiThread(() -> {
@@ -643,13 +634,6 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         return false;
     }
 
-    private static int[] allowedRates() {
-        String m = Build.MODEL;
-        if ("Quest".equals(m)) return new int[]{60, 72};
-        if ("Quest Pro".equals(m)) return new int[]{72, 90};
-        if ("Quest 3".equals(m) || "Quest 3S".equals(m)) return new int[]{72, 80, 90, 120};
-        return new int[]{60, 72, 80, 90, 120}; // Quest 2 and anything else
-    }
 
     // ---------------------------------------------------------------- parsing
     private static int parseInt(String s) {
@@ -668,19 +652,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         return new int[]{w, h};
     }
 
-    private static boolean contains(int[] a, int v) {
-        for (int x : a) if (x == v) return true;
-        return false;
-    }
 
-    private static String join(int[] a) {
-        StringBuilder b = new StringBuilder();
-        for (int x : a) {
-            if (b.length() > 0) b.append(", ");
-            b.append(x);
-        }
-        return b.toString();
-    }
 
     // ---------------------------------------------------------------- UI helpers
     private int px(int dp) {

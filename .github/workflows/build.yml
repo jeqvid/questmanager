@@ -3,7 +3,6 @@ name: Build APK
 on:
   push:
     branches: [main, master]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -57,6 +56,9 @@ jobs:
           echo "::error::No libadb-android version worked. Send the log above to Claude."
           exit 1
 
+      - name: Read app version
+        run: echo "VERSION=$(grep -oP "versionName\s+'\K[^']+" app/build.gradle)" >> "$GITHUB_ENV"
+
       - name: Rename APK
         run: |
           mkdir -p out
@@ -67,8 +69,14 @@ jobs:
           name: QuestManager
           path: out/QuestManager.apk
 
-      - name: Publish release (on v* tags)
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Every upload publishes a release named after versionName in app/build.gradle (e.g. v3.2).
+      # The tag is created automatically; uploading the same version again just replaces the APK.
+      - name: Publish release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION }}
+          name: Quest Manager ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
           files: out/QuestManager.apk
+          make_latest: true

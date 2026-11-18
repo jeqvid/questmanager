@@ -1,6 +1,8 @@
 package com.jeqvid.QuestManager;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.provider.Settings;
 
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -20,7 +22,15 @@ public class AdbRunner implements CommandRunner {
     private volatile boolean connected;
     private volatile int connectedPort;
 
-    public AdbRunner(Context context) {
+    private static AdbRunner instance;
+
+    /** One connection for the whole app, so it survives the window being recreated (e.g. after a Hz change). */
+    public static synchronized AdbRunner get(Context context) {
+        if (instance == null) instance = new AdbRunner(context);
+        return instance;
+    }
+
+    private AdbRunner(Context context) {
         this.context = context.getApplicationContext();
     }
 
@@ -74,8 +84,9 @@ public class AdbRunner implements CommandRunner {
      * Returns a short message for the UI.
      */
     public String makeStable() {
-        // 1) Never forget the pairing (Android's default is 7 days without use).
-        run("settings put global adb_allowed_connection_time 0");
+        // 1) Never forget the pairing (Android's default is 7 days without use), and let Quest Manager switch
+        //    Wireless debugging back on by itself later (after a drop or a restart).
+        run("settings put global adb_allowed_connection_time 0; pm grant " + context.getPackageName() + " " + WRITE_SECURE);
         // 2) Already on the fixed port? Nothing else to do.
         if (connectedPort == FIXED_PORT) return "Connection locked in (port " + FIXED_PORT + ").";
         // 3) Same as "adb tcpip 5555": adbd restarts listening on the fixed port.
@@ -101,17 +112,39 @@ public class AdbRunner implements CommandRunner {
         return "Connected, but the fixed port didn't come up. Reconnect with CONNECT if commands fail.";
     }
 
-    /** Reconnects without the user: fixed port first, then the last wireless debugging port, then auto-detect. */
+    /**
+     * Reconnects without the user. Keeps trying for ~15 s (the headset can take a moment after a display change):
+     * fixed port 5555, then the last wireless debugging port, then auto-detect. If wireless debugging got switched
+     * off, it switches it back on by itself (needs WRITE_SECURE_SETTINGS, which makeStable() grants).
+     */
     public synchronized boolean reconnect(int lastWirelessPort) {
         disconnectQuietly();
-        if (tryConnect(FIXED_PORT)) return true;
-        if (lastWirelessPort > 0 && tryConnect(lastWirelessPort)) return true;
+        for (int attempt = 0; attempt < 6; attempt++) {
+            if (tryConnect(FIXED_PORT)) return true;
+            if (lastWirelessPort > 0 && tryConnect(lastWirelessPort)) return true;
+            if (attempt == 1) enableWirelessDebugging();
+            try {
+                if (autoConnect(2500)) return true;
+            } catch (Exception ignored) {
+            }
+            sleep(1500);
+        }
+        return false;
+    }
+
+    /** Turns Android's Wireless debugging back on, if Quest Manager has been allowed to. */
+    public boolean enableWirelessDebugging() {
+        if (context.checkSelfPermission(WRITE_SECURE) != PackageManager.PERMISSION_GRANTED) return false;
         try {
-            return autoConnect(3000);
+            Settings.Global.putInt(context.getContentResolver(), "adb_enabled", 1);
+            Settings.Global.putInt(context.getContentResolver(), "adb_wifi_enabled", 1);
+            return true;
         } catch (Exception e) {
             return false;
         }
     }
+
+    private static final String WRITE_SECURE = "android.permission.WRITE_SECURE_SETTINGS";
 
     private boolean tryConnect(int port) {
         try {
