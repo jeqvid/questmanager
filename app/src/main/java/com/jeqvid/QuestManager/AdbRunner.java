@@ -14,8 +14,6 @@ import io.github.muntashirakon.adb.AdbStream;
 public class AdbRunner implements CommandRunner {
 
     static final String HOST = "127.0.0.1";
-    /** Fixed ADB port (same as "adb tcpip 5555"): survives wireless debugging toggling off, until reboot. */
-    static final int FIXED_PORT = 5555;
     private static final String RC_MARK = "__QM_RC=";
 
     private final Context context;
@@ -79,54 +77,30 @@ public class AdbRunner implements CommandRunner {
     }
 
     /**
-     * Makes the connection last: pairing never expires, and ADB moves to fixed port 5555 so Quest Manager can
-     * reconnect by itself when wireless debugging switches off (e.g. after a refresh rate change).
-     * Returns a short message for the UI.
+     * Makes the pairing last: it never expires, and Quest Manager gets permission to switch Wireless debugging
+     * back on by itself when it turns off (after a display change or a restart). Returns a short UI message.
      */
     public String makeStable() {
-        // 1) Never forget the pairing (Android's default is 7 days without use), and let Quest Manager switch
-        //    Wireless debugging back on by itself later (after a drop or a restart).
-        run("settings put global adb_allowed_connection_time 0; pm grant " + context.getPackageName() + " " + WRITE_SECURE);
-        // 2) Already on the fixed port? Nothing else to do.
-        if (connectedPort == FIXED_PORT) return "Connection locked in (port " + FIXED_PORT + ").";
-        // 3) Same as "adb tcpip 5555": adbd restarts listening on the fixed port.
-        try {
-            AdbStream s = AdbManager.get(context).openStream("tcpip:" + FIXED_PORT);
-            try {
-                Streams.readAll(s.openInputStream());
-            } catch (Exception ignored) {
-                // adbd restarts and drops us: expected
-            }
-            try {
-                s.close();
-            } catch (Exception ignored) {
-            }
-        } catch (Exception e) {
-            return "Connected (couldn't switch to the fixed port: " + e.getMessage() + ").";
-        }
-        connected = false;
-        for (int attempt = 0; attempt < 10; attempt++) {
-            sleep(700);
-            if (tryConnect(FIXED_PORT)) return "Connection locked in: stays connected until you restart the headset.";
-        }
-        return "Connected, but the fixed port didn't come up. Reconnect with CONNECT if commands fail.";
+        Result r = run("settings put global adb_allowed_connection_time 0; pm grant " + context.getPackageName() + " " + WRITE_SECURE);
+        return r.ok ? "Pairing saved for good: Quest Manager reconnects by itself from now on."
+                : "Connected (couldn't save the auto-reconnect setting: " + r.output + ").";
     }
 
     /**
      * Reconnects without the user. Keeps trying for ~15 s (the headset can take a moment after a display change):
-     * fixed port 5555, then the last wireless debugging port, then auto-detect. If wireless debugging got switched
-     * off, it switches it back on by itself (needs WRITE_SECURE_SETTINGS, which makeStable() grants).
+     * the last wireless debugging port, then auto-detect (the port changes when Wireless debugging restarts). If it
+     * got switched off, it switches it back on by itself (needs WRITE_SECURE_SETTINGS, which makeStable() grants).
      */
     public synchronized boolean reconnect(int lastWirelessPort) {
         disconnectQuietly();
+        boolean reenabled = false;
         for (int attempt = 0; attempt < 6; attempt++) {
-            if (tryConnect(FIXED_PORT)) return true;
             if (lastWirelessPort > 0 && tryConnect(lastWirelessPort)) return true;
-            if (attempt == 1) enableWirelessDebugging();
             try {
-                if (autoConnect(2500)) return true;
+                if (autoConnect(3000)) return true;
             } catch (Exception ignored) {
             }
+            if (!reenabled) reenabled = enableWirelessDebugging(); // it may have switched off: turn it back on
             sleep(1500);
         }
         return false;

@@ -321,9 +321,9 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 + "3. Tap <b>Pair device with pairing code</b>. Type the 6-digit code and the port it shows, then tap <b>PAIR</b>.<br>"
                 + "4. On the Wireless debugging screen, type the port shown under <b>IP address &amp; Port</b> "
                 + "(the number after the colon) and tap <b>CONNECT</b>. Leave it empty to find it automatically.<br><br>"
-                + "After that, Quest Manager stays connected by itself until you restart the headset, even if wireless "
-                + "debugging switches off. The pairing never expires. After a restart, just turn Wireless debugging on "
-                + "again; no need to pair again. If an <b>Allow debugging?</b> popup appears, tick <b>Always allow</b>.",
+                + "After that, the pairing never expires and Quest Manager reconnects by itself, switching Wireless "
+                + "debugging back on when it turns off (also after a restart). If an <b>Allow wireless debugging on this "
+                + "network?</b> popup appears, tick <b>Always allow</b>.",
                 15, 0xffdddddd));
 
         LinearLayout open = row();
@@ -502,6 +502,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         adb.setLastWirelessPort(saved);
         worker.execute(() -> {
             // Still connected (window was just recreated)? Keep it. Otherwise reconnect by itself.
+            if (!adb.isReady()) adb.enableWirelessDebugging(); // after a restart it's off: switch it on (if allowed)
             boolean ok = adb.isReady() || adb.reconnect(saved);
             final String lock = ok ? adb.makeStable() : null;
             final boolean connected = ok;
@@ -546,7 +547,14 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         worker.execute(() -> {
             String msg;
             try {
-                boolean ok = port > 0 ? adb.connect(port) : adb.autoConnect(6000);
+                boolean ok = false;
+                if (port > 0) {
+                    try {
+                        ok = adb.connect(port);
+                    } catch (Exception ignored) {
+                    }
+                }
+                if (!ok) ok = adb.autoConnect(6000);
                 if (ok) {
                     if (port > 0) {
                         prefs.edit().putInt("port", port).apply();
