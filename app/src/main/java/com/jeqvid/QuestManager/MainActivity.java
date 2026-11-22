@@ -30,6 +30,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
 import android.text.method.ScrollingMovementMethod;
 import android.widget.CheckBox;
+import android.content.pm.PackageManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.SeekBar;
@@ -38,6 +39,12 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import org.tukaani.xz.XZInputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -149,6 +156,8 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 new Setting("VSYNC EMULATION", "", null, SLIDER, 0, 1, P + "vsyncEmu"));
         addProximitySection(experimental);
         addAdbSection(experimental);
+        addSingularitySection(experimental);
+        addFridaSection(experimental);
         addTab(side, "EXPERIMENTAL", experimental);
 
         side.addView(new View(this), lp(-1, 0, 1f, 0)); // pushes the rest to the bottom
@@ -184,6 +193,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     protected void onResume() {
         super.onResume();
         refreshCurrent();
+        refreshTools();
     }
 
     // ---------------------------------------------------------------- current values
@@ -589,6 +599,200 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(adbOutput);
     }
 
+    // ---------------------------------------------------------------- Singularity + frida-server
+    static final String SINGULARITY_PKG = "com.lumi.singularity";
+    static final String SINGULARITY_URL = "https://github.com/Lumince/singularity/releases";
+    static final String FRIDA_PATH = "/data/local/tmp/frida-server";
+    static final String FRIDA_DEFAULT_VERSION = "17.0.9";
+
+    private TextView singStatus, singMsg, fridaStatus, fridaMsg;
+    private View singUninstall, fridaUninstall;
+    private EditText fridaVersion;
+
+    private void addSingularitySection(LinearLayout page) {
+        spacerHeader(page, "SINGULARITY");
+        singStatus = text("Singularity Status: ...", 16, 0xffcfcfcf);
+        page.addView(singStatus);
+        LinearLayout r = row();
+        r.addView(button("DOWNLOAD", v -> openLink(SINGULARITY_URL)), lp(-2, -2, 0, 0));
+        singUninstall = button("UNINSTALL", v -> uninstallSingularity());
+        r.addView(singUninstall, lp(-2, -2, 0, 14));
+        page.addView(r);
+        singMsg = text("", 14, STATUS);
+        page.addView(singMsg);
+    }
+
+    private void addFridaSection(LinearLayout page) {
+        spacerHeader(page, "FRIDA-SERVER");
+        fridaStatus = text("Frida Status: ...", 16, 0xffcfcfcf);
+        page.addView(fridaStatus);
+        LinearLayout r = row();
+        fridaVersion = input("Version");
+        fridaVersion.setInputType(InputType.TYPE_CLASS_TEXT);
+        fridaVersion.setText(prefs.getString("frida_version", FRIDA_DEFAULT_VERSION));
+        fridaVersion.setGravity(Gravity.CENTER);
+        r.addView(fridaVersion, lp(130, -2, 0, 0));
+        r.addView(button("DOWNLOAD", v -> installFrida()), lp(-2, -2, 0, 14));
+        fridaUninstall = button("UNINSTALL", v -> uninstallFrida());
+        r.addView(fridaUninstall, lp(-2, -2, 0, 14));
+        page.addView(r);
+        fridaMsg = text("Installs to " + FRIDA_PATH, 14, STATUS);
+        page.addView(fridaMsg);
+    }
+
+    /** Updates both status lines and shows UNINSTALL only for what's installed. */
+    private void refreshTools() {
+        if (singStatus == null) return;
+        boolean sing = isInstalled(SINGULARITY_PKG);
+        singStatus.setText("Singularity Status: " + (sing ? "installed" : "not installed"));
+        singUninstall.setVisibility(sing ? View.VISIBLE : View.GONE);
+
+        if (!runner.isReady()) {
+            fridaStatus.setText("Frida Status: connect wireless ADB to check");
+            fridaUninstall.setVisibility(View.GONE);
+            return;
+        }
+        worker.execute(() -> {
+            final CommandRunner.Result r = runner.run("if [ -f " + FRIDA_PATH + " ]; then echo yes; "
+                    + FRIDA_PATH + " --version 2>/dev/null; else echo no; fi");
+            runOnUiThread(() -> {
+                boolean installed = r.ok && r.output.startsWith("yes");
+                String version = installed ? r.output.substring(3).trim() : "";
+                fridaStatus.setText("Frida Status: " + (!r.ok ? "couldn't check"
+                        : installed ? "installed" + (version.isEmpty() ? "" : " (" + version + ")") : "not installed"));
+                fridaUninstall.setVisibility(installed ? View.VISIBLE : View.GONE);
+            });
+        });
+    }
+
+    private boolean isInstalled(String pkg) {
+        try {
+            getPackageManager().getPackageInfo(pkg, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    private void openLink(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) {
+            singMsg.setText("Couldn't open the browser: " + e.getMessage());
+        }
+    }
+
+    private void uninstallSingularity() {
+        if (runner.isReady()) {
+            singMsg.setText("Uninstalling...");
+            worker.execute(() -> {
+                final CommandRunner.Result r = runner.run("pm uninstall " + SINGULARITY_PKG);
+                runOnUiThread(() -> {
+                    singMsg.setText(r.ok ? "Singularity uninstalled." : "Failed: " + r.output);
+                    refreshTools();
+                });
+            });
+        } else {
+            // no shell access yet: let Android ask the user
+            try {
+                startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + SINGULARITY_PKG))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception e) {
+                singMsg.setText("Couldn't start the uninstall: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Downloads frida-server for arm64 from Frida's GitHub releases, unpacks it and installs it to /data/local/tmp. */
+    private void installFrida() {
+        final String version = fridaVersion.getText().toString().trim();
+        if (version.isEmpty()) {
+            fridaMsg.setText("Type a Frida version, e.g. " + FRIDA_DEFAULT_VERSION);
+            return;
+        }
+        if (!runner.isReady()) {
+            fridaMsg.setText("Not connected. Set up wireless ADB first (installing needs shell access).");
+            if (setupTab >= 0) selectTab(setupTab);
+            return;
+        }
+        prefs.edit().putString("frida_version", version).apply();
+        final String url = "https://github.com/frida/frida/releases/download/" + version
+                + "/frida-server-" + version + "-android-arm64.xz";
+        fridaMsg.setText("Downloading frida-server " + version + "...");
+        setupWorker.execute(() -> {
+            String msg;
+            try {
+                File dir = getExternalFilesDir(null);
+                if (dir == null) throw new Exception("no storage");
+                File out = new File(dir, "frida-server");
+                download(url, out, version);
+                post("Installing...");
+                final CommandRunner.Result r = runner.run("cp '" + out.getAbsolutePath() + "' " + FRIDA_PATH
+                        + " && chmod 755 " + FRIDA_PATH + " && " + FRIDA_PATH + " --version");
+                out.delete();
+                msg = r.ok ? "Installed frida-server " + r.output + " to " + FRIDA_PATH : "Install failed: " + r.output;
+            } catch (Exception e) {
+                msg = "Download failed: " + e.getMessage();
+            }
+            final String m = msg;
+            runOnUiThread(() -> {
+                fridaMsg.setText(m);
+                refreshTools();
+            });
+        });
+    }
+
+    private void post(final String m) {
+        runOnUiThread(() -> fridaMsg.setText(m));
+    }
+
+    private void download(String url, File out, String version) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setInstanceFollowRedirects(true);
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        int code = c.getResponseCode();
+        if (code == 404) throw new Exception("Frida " + version + " doesn't exist. Check the version number.");
+        if (code != 200) throw new Exception("server said " + code);
+        long total = c.getContentLength();
+        InputStream raw = c.getInputStream();
+        InputStream in = new XZInputStream(raw);
+        OutputStream o = new FileOutputStream(out);
+        try {
+            byte[] buf = new byte[65536];
+            long done = 0, lastShown = 0;
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                o.write(buf, 0, n);
+                done += n;
+                if (done - lastShown > 2_000_000) {
+                    lastShown = done;
+                    post("Downloading frida-server " + version + "... " + (done / 1_000_000) + " MB");
+                }
+            }
+        } finally {
+            o.close();
+            in.close();
+            c.disconnect();
+        }
+    }
+
+    private void uninstallFrida() {
+        if (!runner.isReady()) {
+            fridaMsg.setText("Not connected. Set up wireless ADB first.");
+            return;
+        }
+        fridaMsg.setText("Removing...");
+        worker.execute(() -> {
+            final CommandRunner.Result r = runner.run("pkill -f " + FRIDA_PATH + "; rm -f " + FRIDA_PATH + " && echo removed");
+            runOnUiThread(() -> {
+                fridaMsg.setText(r.ok ? "frida-server removed." : "Failed: " + r.output);
+                refreshTools();
+            });
+        });
+    }
+
+
     private void runAdbLine() {
         String cmd = adbInput.getText().toString().trim();
         if (cmd.startsWith("adb shell ")) cmd = cmd.substring("adb shell ".length()).trim();
@@ -727,6 +931,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 if (connected) {
                     setupStatus.setText("Connected to wireless ADB. " + lock);
                     refreshCurrent();
+                    refreshTools();
                 } else {
                     setupStatus.setText("Not connected yet. Follow the steps above.");
                     selectTab(setupTab);
@@ -797,6 +1002,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
                 setupStatus.setText(m);
                 updateConnStatus();
                 refreshCurrent();
+                refreshTools();
             });
         });
     }

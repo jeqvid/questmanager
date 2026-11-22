@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- Granted by Quest Manager itself over ADB ("pm grant"), lets it switch Wireless debugging back on -->
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
@@ -14,6 +15,7 @@
     <!-- Android 11+ hides other apps unless declared: needed to find the Android Settings app -->
     <queries>
         <package android:name="com.android.settings" />
+        <package android:name="com.lumi.singularity" />
     </queries>
 
     <application

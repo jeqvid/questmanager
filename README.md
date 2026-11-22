@@ -21,8 +21,8 @@ Pairing is remembered. After a reboot, turn Wireless debugging back on; Quest Ma
 
 ## Building
 
-Every push builds the APK with GitHub Actions and publishes it as a GitHub release named after
-`versionName` in `app/build.gradle` (the tag is created automatically).
+Every push builds the APK with GitHub Actions (Actions tab > latest run > *QuestManager* artifact).
+Releases are published by hand.
 
 Optional signing (so updates install over older versions): add these repository secrets:
 `KEYSTORE_BASE64` (base64 of your .jks), `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
