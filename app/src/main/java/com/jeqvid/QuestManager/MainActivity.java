@@ -603,7 +603,7 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     static final String SINGULARITY_PKG = "com.lumi.singularity";
     static final String SINGULARITY_URL = "https://github.com/Lumince/singularity/releases";
     static final String FRIDA_PATH = "/data/local/tmp/frida-server";
-    static final String FRIDA_DEFAULT_VERSION = "17.0.9";
+    static final String FRIDA_DEFAULT_VERSION = "17.17.0"; // the version Singularity uses
     /** Kill by PID of the process named exactly frida-server. (pkill -f would also match, and kill, our own shell.) */
     static final String FRIDA_KILL = "p=$(pidof frida-server); [ -z \"$p\" ] || kill $p";
     /** Runs a command as root if possible: already root, else su (max 5 s so a prompt can't freeze it), else as is. */
@@ -641,7 +641,9 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         LinearLayout r = row();
         fridaVersion = input("Version");
         fridaVersion.setInputType(InputType.TYPE_CLASS_TEXT);
-        fridaVersion.setText(prefs.getString("frida_version", FRIDA_DEFAULT_VERSION));
+        String savedVersion = prefs.getString("frida_version", FRIDA_DEFAULT_VERSION);
+        if ("17.0.9".equals(savedVersion)) savedVersion = FRIDA_DEFAULT_VERSION; // old default didn't exist
+        fridaVersion.setText(savedVersion);
         fridaVersion.setGravity(Gravity.CENTER);
         r.addView(fridaVersion, lp(130, -2, 0, 0));
         fridaDownload = button("DOWNLOAD", v -> installFrida());
