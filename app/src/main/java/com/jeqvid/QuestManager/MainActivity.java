@@ -604,9 +604,18 @@ public class MainActivity extends Activity implements View.OnHoverListener {
     static final String SINGULARITY_URL = "https://github.com/Lumince/singularity/releases";
     static final String FRIDA_PATH = "/data/local/tmp/frida-server";
     static final String FRIDA_DEFAULT_VERSION = "17.0.9";
+    /** Kill by PID of the process named exactly frida-server. (pkill -f would also match, and kill, our own shell.) */
+    static final String FRIDA_KILL = "p=$(pidof frida-server); [ -z \"$p\" ] || kill $p";
+    /** Runs a command as root if possible: already root, else su (max 5 s so a prompt can't freeze it), else as is. */
+    static String asRoot(String c) {
+        return "if [ \"$(id -u)\" = 0 ]; then " + c + "; "
+                + "elif command -v su >/dev/null 2>&1; then timeout 5 su -c '" + c + "' || " + c + "; "
+                + "else " + c + "; fi";
+    }
 
     private TextView singStatus, singMsg, fridaStatus, fridaMsg;
-    private View singUninstall, fridaUninstall;
+    private View singDownload, singLaunch, singUninstall;
+    private View fridaDownload, fridaStart, fridaStop, fridaUninstall;
     private EditText fridaVersion;
 
     private void addSingularitySection(LinearLayout page) {
@@ -614,7 +623,10 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         singStatus = text("Singularity Status: ...", 16, 0xffcfcfcf);
         page.addView(singStatus);
         LinearLayout r = row();
-        r.addView(button("DOWNLOAD", v -> openLink(SINGULARITY_URL)), lp(-2, -2, 0, 0));
+        singDownload = button("DOWNLOAD", v -> openLink(SINGULARITY_URL));
+        r.addView(singDownload, lp(-2, -2, 0, 0));
+        singLaunch = button("LAUNCH", v -> launchSingularity());
+        r.addView(singLaunch, lp(-2, -2, 0, 0));
         singUninstall = button("UNINSTALL", v -> uninstallSingularity());
         r.addView(singUninstall, lp(-2, -2, 0, 14));
         page.addView(r);
@@ -632,7 +644,12 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         fridaVersion.setText(prefs.getString("frida_version", FRIDA_DEFAULT_VERSION));
         fridaVersion.setGravity(Gravity.CENTER);
         r.addView(fridaVersion, lp(130, -2, 0, 0));
-        r.addView(button("DOWNLOAD", v -> installFrida()), lp(-2, -2, 0, 14));
+        fridaDownload = button("DOWNLOAD", v -> installFrida());
+        r.addView(fridaDownload, lp(-2, -2, 0, 14));
+        fridaStart = button("START", v -> startFrida());
+        r.addView(fridaStart, lp(-2, -2, 0, 0));
+        fridaStop = button("STOP", v -> stopFrida());
+        r.addView(fridaStop, lp(-2, -2, 0, 14));
         fridaUninstall = button("UNINSTALL", v -> uninstallFrida());
         r.addView(fridaUninstall, lp(-2, -2, 0, 14));
         page.addView(r);
@@ -640,27 +657,96 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         page.addView(fridaMsg);
     }
 
-    /** Updates both status lines and shows UNINSTALL only for what's installed. */
+    /** Updates both status lines and swaps DOWNLOAD for the installed-only buttons (and back). */
     private void refreshTools() {
         if (singStatus == null) return;
         boolean sing = isInstalled(SINGULARITY_PKG);
         singStatus.setText("Singularity Status: " + (sing ? "installed" : "not installed"));
+        singDownload.setVisibility(sing ? View.GONE : View.VISIBLE);
+        singLaunch.setVisibility(sing ? View.VISIBLE : View.GONE);
         singUninstall.setVisibility(sing ? View.VISIBLE : View.GONE);
 
         if (!runner.isReady()) {
             fridaStatus.setText("Frida Status: connect wireless ADB to check");
-            fridaUninstall.setVisibility(View.GONE);
+            showFridaButtons(false);
             return;
         }
         worker.execute(() -> {
             final CommandRunner.Result r = runner.run("if [ -f " + FRIDA_PATH + " ]; then echo yes; "
-                    + FRIDA_PATH + " --version 2>/dev/null; else echo no; fi");
+                    + FRIDA_PATH + " --version 2>/dev/null; "
+                    + "if pidof frida-server >/dev/null 2>&1 || ps -A 2>/dev/null | grep -q '[f]rida-server'; "
+                    + "then echo running; else echo stopped; fi; else echo no; fi");
             runOnUiThread(() -> {
-                boolean installed = r.ok && r.output.startsWith("yes");
-                String version = installed ? r.output.substring(3).trim() : "";
-                fridaStatus.setText("Frida Status: " + (!r.ok ? "couldn't check"
-                        : installed ? "installed" + (version.isEmpty() ? "" : " (" + version + ")") : "not installed"));
-                fridaUninstall.setVisibility(installed ? View.VISIBLE : View.GONE);
+                String[] lines = r.output.trim().split("\n");
+                boolean installed = r.ok && lines.length > 0 && lines[0].trim().equals("yes");
+                boolean running = installed && r.output.contains("running");
+                String version = "";
+                if (installed && lines.length > 2) version = lines[1].trim();
+                if (!r.ok) {
+                    fridaStatus.setText("Frida Status: couldn't check");
+                } else if (!installed) {
+                    fridaStatus.setText("Frida Status: not installed");
+                } else {
+                    fridaStatus.setText("Frida Status: installed" + (version.isEmpty() ? "" : " (" + version + ")")
+                            + (running ? "  -  running" : "  -  not running"));
+                }
+                showFridaButtons(installed);
+            });
+        });
+    }
+
+    private void showFridaButtons(boolean installed) {
+        int on = installed ? View.VISIBLE : View.GONE, off = installed ? View.GONE : View.VISIBLE;
+        fridaVersion.setVisibility(off);
+        fridaDownload.setVisibility(off);
+        fridaStart.setVisibility(on);
+        fridaStop.setVisibility(on);
+        fridaUninstall.setVisibility(on);
+    }
+
+    private void launchSingularity() {
+        Intent i = getPackageManager().getLaunchIntentForPackage(SINGULARITY_PKG);
+        if (i == null) {
+            singMsg.setText("Couldn't find Singularity's launcher.");
+            return;
+        }
+        try {
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) {
+            singMsg.setText("Couldn't launch Singularity: " + e.getMessage());
+        }
+    }
+
+    /** Runs frida-server in the background; as root through su when the headset is rooted. */
+    private void startFrida() {
+        if (!runner.isReady()) {
+            fridaMsg.setText("Not connected. Set up wireless ADB first.");
+            return;
+        }
+        fridaMsg.setText("Starting frida-server...");
+        String launch = FRIDA_PATH + " -D >/dev/null 2>&1";
+        String cmd = "chmod 755 " + FRIDA_PATH + "; " + asRoot(launch) + "; sleep 1; "
+                + "if pidof frida-server >/dev/null 2>&1 || ps -A 2>/dev/null | grep -q '[f]rida-server'; "
+                + "then echo started; else echo 'did not start'; exit 1; fi";
+        runTool(cmd, "frida-server is running.");
+    }
+
+    private void stopFrida() {
+        if (!runner.isReady()) {
+            fridaMsg.setText("Not connected. Set up wireless ADB first.");
+            return;
+        }
+        fridaMsg.setText("Stopping frida-server...");
+        String cmd = asRoot(FRIDA_KILL) + "; true";
+        runTool(cmd, "frida-server stopped.");
+    }
+
+    private void runTool(final String cmd, final String okText) {
+        worker.execute(() -> {
+            final CommandRunner.Result r = runner.run(cmd);
+            runOnUiThread(() -> {
+                fridaMsg.setText(r.ok ? okText : "Failed: " + r.output);
+                refreshTools();
             });
         });
     }
@@ -784,7 +870,9 @@ public class MainActivity extends Activity implements View.OnHoverListener {
         }
         fridaMsg.setText("Removing...");
         worker.execute(() -> {
-            final CommandRunner.Result r = runner.run("pkill -f " + FRIDA_PATH + "; rm -f " + FRIDA_PATH + " && echo removed");
+            final CommandRunner.Result r = runner.run("(" + asRoot(FRIDA_KILL) + ") >/dev/null 2>&1; "
+                    + "rm -f " + FRIDA_PATH + " || " + asRoot("rm -f " + FRIDA_PATH) + "; "
+                    + "[ ! -f " + FRIDA_PATH + " ] && echo removed");
             runOnUiThread(() -> {
                 fridaMsg.setText(r.ok ? "frida-server removed." : "Failed: " + r.output);
                 refreshTools();
